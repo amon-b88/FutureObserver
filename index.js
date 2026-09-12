@@ -249,6 +249,36 @@ async function callCustomApi(prompt, apiConfig) {
     return content;
 }
 
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+// 把生成结果（纯文本，"1楼 - xxx：..." / "└ 2楼 - xxx 回复1楼：..." 这种格式）
+// 解析成一张张"楼层卡片"，而不是原样堆成一大段文字。
+function renderResultInto($el, rawText) {
+    const text = String(rawText || '').trim();
+    if (!text) {
+        $el.text('没有得到结果。');
+        return;
+    }
+
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    let html = '';
+    for (const line of lines) {
+        const isReply = /^[└╰\-]/.test(line) || /回复\s*\d+\s*楼/.test(line);
+        const cleaned = line.replace(/^[└╰\-]\s*/, '');
+        const escaped = escapeHtml(cleaned);
+        html += isReply
+            ? `<div class="future-observer-reply">${escaped}</div>`
+            : `<div class="future-observer-comment">${escaped}</div>`;
+    }
+
+    $el.html(html || escapeHtml(text));
+}
+
 async function generateObservation() {
     // 用 class 选择器，设置抽屉里的结果框和悬浮球弹窗里的结果框会同时更新，天然保持同步
     const resultBoxes = $('.future-observer-result');
@@ -282,7 +312,9 @@ async function generateObservation() {
             });
         }
 
-        resultBoxes.text(String(result || '没有得到结果。').trim());
+        resultBoxes.each(function () {
+            renderResultInto($(this), result);
+        });
     } catch (error) {
         console.error('[观察者论坛]', error);
         let msg = error?.message || String(error);
@@ -292,7 +324,7 @@ async function generateObservation() {
         resultBoxes.text(`生成失败：${msg}`);
         toastr.error('观测生成失败，请打开控制台查看错误。');
     } finally {
-        buttons.prop('disabled', false).text('🔭 查看观测评价');
+        buttons.prop('disabled', false).text('🔭 生成评论区');
     }
 }
 
@@ -437,8 +469,8 @@ function buildFloatingUI() {
                 </select>
                 <select class="future-observer-identity-select"></select>
             </div>
-            <button class="menu_button future-observer-generate-btn">🔭 查看观测评价</button>
-            <div class="future-observer-result future-observer-popup-result">点击"查看观测评价"生成。</div>
+            <button class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
+            <div class="future-observer-result future-observer-popup-result">点击“生成评论区”查看。</div>
         </div>
     `);
 

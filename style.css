@@ -9,7 +9,34 @@
 .future-observer-action{margin:10px 0}
 .future-observer-result-details{margin-top:8px}
 .future-observer-result-details summary{cursor:pointer;user-select:none}
-.future-observer-result{white-space:pre-wrap;line-height:1.6;margin-top:8px;padding:8px;border-radius:6px;background:rgba(127,127,127,.08)}
+.future-observer-result{
+    white-space:pre-wrap;
+    line-height:1.6;
+    margin-top:8px;
+    padding:10px;
+    border-radius:8px;
+    background:rgba(127,127,127,.08);
+    min-height:60px;
+}
+
+/* 观测评论渲染成"楼层卡片"样式，而不是一坨纯文字 */
+.future-observer-comment{
+    padding:7px 10px;
+    margin:6px 0;
+    border-radius:8px;
+    background:rgba(255,255,255,.06);
+    line-height:1.55;
+}
+.future-observer-reply{
+    padding:6px 10px;
+    margin:2px 0 8px 18px;
+    border-left:2px solid rgba(127,180,255,.5);
+    background:rgba(127,180,255,.06);
+    border-radius:0 8px 8px 0;
+    font-size:.93em;
+    line-height:1.5;
+    opacity:.92;
+}
 
 .future-observer-customapi-fields{
     margin:4px 0 10px 4px;
@@ -29,58 +56,83 @@
     position:fixed;
     right:20px;
     bottom:120px;
-    width:48px;
-    height:48px;
+    width:50px;
+    height:50px;
     border-radius:50%;
-    background:rgba(30,30,30,.88);
-    border:1px solid rgba(255,255,255,.15);
+    background:linear-gradient(145deg, rgba(45,45,50,.92), rgba(20,20,24,.92));
+    border:1px solid rgba(255,255,255,.18);
     color:#fff;
-    font-size:22px;
+    font-size:23px;
     display:flex;
     align-items:center;
     justify-content:center;
     cursor:grab;
     z-index:9999;
-    box-shadow:0 2px 8px rgba(0,0,0,.4);
+    box-shadow:0 3px 10px rgba(0,0,0,.45);
     user-select:none;
     touch-action:none;
+    transition:box-shadow .15s ease;
 }
-.future-observer-fab:active{cursor:grabbing}
+.future-observer-fab:active{cursor:grabbing;box-shadow:0 1px 4px rgba(0,0,0,.5)}
 
 /* 悬浮弹窗 */
 .future-observer-popup{
     position:fixed;
-    width:280px;
-    max-height:60vh;
-    background:rgba(20,20,20,.96);
+    width:320px;
+    max-width:calc(100vw - 20px);
+    max-height:70vh;
+    background:rgba(18,18,20,.97);
     border:1px solid rgba(255,255,255,.15);
-    border-radius:10px;
-    box-shadow:0 4px 16px rgba(0,0,0,.5);
+    border-radius:12px;
+    box-shadow:0 6px 20px rgba(0,0,0,.55);
     z-index:9999;
     display:flex;
     flex-direction:column;
     overflow:hidden;
+    box-sizing:border-box;
 }
+.future-observer-popup *{box-sizing:border-box}
 .future-observer-popup-header{
     display:flex;
     align-items:center;
     justify-content:space-between;
-    padding:8px 10px;
+    padding:10px 12px;
     font-weight:bold;
+    background:rgba(255,255,255,.04);
     border-bottom:1px solid rgba(255,255,255,.1);
 }
-.future-observer-popup-close{cursor:pointer;opacity:.7}
-.future-observer-popup-close:hover{opacity:1}
+.future-observer-popup-close{
+    cursor:pointer;
+    opacity:.65;
+    font-size:1.1em;
+    line-height:1;
+    padding:2px 4px;
+    border-radius:4px;
+}
+.future-observer-popup-close:hover{opacity:1;background:rgba(255,255,255,.08)}
 .future-observer-popup-controls{
     display:flex;
     flex-direction:column;
-    gap:6px;
-    padding:8px 10px;
+    gap:8px;
+    padding:10px 12px 6px;
 }
-.future-observer-popup-controls select{width:100%;max-width:none}
-.future-observer-popup > .menu_button{margin:0 10px 8px}
+.future-observer-popup-controls select{
+    width:100%;
+    max-width:none;
+}
+/* 显式给按钮和结果区算出确切宽度，不依赖 flex 的 stretch 行为
+   （在部分酒馆主题下 stretch 不生效，会导致按钮/结果区收缩成
+   逐字换行的竖条，这里直接用 calc 强制撑满宽度） */
+.future-observer-popup > .menu_button{
+    width:calc(100% - 24px);
+    margin:4px 12px 10px;
+    white-space:nowrap;
+    text-align:center;
+}
 .future-observer-popup-result{
-    margin:0 10px 10px;
+    width:calc(100% - 24px);
+    margin:0 12px 12px;
     overflow-y:auto;
-    max-height:30vh;
+    min-height:90px;
+    max-height:38vh;
 }
