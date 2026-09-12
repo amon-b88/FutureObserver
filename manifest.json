@@ -1,13 +1,13 @@
 {
-  "display_name": "Future Observer",
+  "display_name": "观察者论坛 Observer Forum",
   "loading_order": 100,
   "requires": [],
   "optional": [],
   "dependencies": [],
   "js": "index.js",
   "css": "style.css",
-  "author": "OpenAI",
-  "version": "0.3.0",
+  "author": "amon-b88",
+  "version": "0.4.0",
   "homePage": "",
   "auto_update": true
 }

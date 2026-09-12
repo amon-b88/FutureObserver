@@ -15,26 +15,81 @@ const EXTENSION_NAME = (() => {
     if (idx !== -1 && parts[idx + 1]) {
         return `third-party/${parts[idx + 1]}`;
     }
-    console.warn('[Future Observer] 无法从 import.meta.url 解析出扩展文件夹名，使用默认值。当前 url:', import.meta.url);
+    console.warn('[观察者论坛] 无法从 import.meta.url 解析出扩展文件夹名，使用默认值。当前 url:', import.meta.url);
     return 'third-party/FutureObserver';
 })();
 
 const DEFAULT_SETTINGS = Object.freeze({
     messageCount: 10,
     maxChars: 14000,
-    mode: 'forum',
-    time: '200',
+    timeDirection: 'future', // 'past' | 'present' | 'future'
+    identity: 'forum',
     fabEnabled: true,
     fabX: null,
     fabY: null,
+    customApi: Object.freeze({
+        enabled: false,
+        endpoint: '',
+        apiKey: '',
+        model: '',
+    }),
 });
 
-const MODES = {
-    forum: '未来网络论坛：普通网友、吃瓜群众、历史爱好者互相评论、吐槽、争论。',
-    historian: '未来历史研究：历史学者、研究者讨论史料、因果、评价与争议。',
-    descendants: '当事人后代：后代看到祖先这段历史后的吐槽、尴尬、骄傲或争论。',
-    news: '未来新闻节目：主持人、记者、专家讨论这段历史。',
-    mixed: '混合模式：网友、历史学者、后代、媒体等不同身份自然出现。',
+// 每个时间方向下拉框里可选的身份视角
+const IDENTITY_OPTIONS = {
+    past: [
+        { value: 'selves', label: '当事人论坛（更早的自己）' },
+        { value: 'locals', label: '过去的路人/网友' },
+        { value: 'mixed', label: '混合模式' },
+    ],
+    present: [
+        { value: 'selves', label: '当事人论坛（实时）' },
+        { value: 'locals', label: '同时代路人网友' },
+        { value: 'mixed', label: '混合模式' },
+    ],
+    future: [
+        { value: 'forum', label: '未来网友' },
+        { value: 'historian', label: '历史学者' },
+        { value: 'descendants', label: '当事人后代' },
+        { value: 'news', label: '未来新闻' },
+        { value: 'selves', label: '当事人论坛（回忆/翻案）' },
+        { value: 'mixed', label: '混合模式' },
+    ],
+};
+
+const DIRECTION_OPTIONS = [
+    { value: 'past', label: '过去' },
+    { value: 'present', label: '现在' },
+    { value: 'future', label: '未来' },
+];
+
+// 时间背景说明文字
+const DIRECTION_TEXT = {
+    past: '假设存在一个更早的时间点。评论者们正"提前"看到了后续会发生的这段剧情，但他们并不知道这是"未来"，只是单纯地看到了这些即将/已经发生的事，用当时的认知去理解和反应。',
+    present: '假设这段剧情正在当下同一时间线上发生。评论者们与故事里的时代背景相同，是同一个"现在"，是正在经历/围观这一切时的实时反应，不是事后回忆。',
+    future: '假设这段剧情早已成为很久以前的历史。评论者们站在遥远的未来回望这一切，带着事后诸葛亮式的评价、争论甚至翻案。',
+};
+
+// 评论者身份说明文字，按 [时间方向][身份] 两级查找
+const IDENTITY_TEXT = {
+    past: {
+        selves: '评论者是故事里角色们更早以前的自己（不必是"少年"——具体处于人生的哪个阶段，或者这个世界观、这个种族是否存在"年龄阶段"这种概念，请你自己根据故事本身的设定判断）。他们此刻并不知道后来会发生这段故事里的事，现在"看到"了，会做出反应、互相议论，甚至互相吐槽对方以后的所作所为。',
+        locals: '评论者是那个更早时代里，与主线剧情无关的普通人、路人、网友。他们完全不了解"未来"（也就是现在这段剧情）的背景设定，看到剧情里发生的事（尤其是突发、剧烈的变化）会产生五花八门的反应，不要千篇一律。可以参考但完全不限于以下反应类型（这只是灵感清单，不必照抄，也鼓励自己发挥全新的类型）：\n    - 恐慌笃信派：认定是天罚、异象、末世预兆\n    - 行动派：想要提前找出苗头、动手干预甚至除掉隐患\n    - 虚无摆烂派：看破一切，"横竖要完，不如及时行乐"\n    - 死不信派：坚持这是谣言、恶作剧、胡编的故事\n    - 投机派：盘算着怎么蹭这件事发财、出名、抢占先机\n    - 纯吃瓜派：不站队，单纯看戏起哄\n  请你根据故事本身的世界观和基调，自由挑选/设计几种合适的反应类型分配给不同评论者，不要所有人反应雷同。',
+        mixed: '评论者里既有故事角色们更早以前的自己，也有那个时代普通的路人、网友，两类人自然混杂在一起议论、争执，具体每条评论是哪一类身份由你自由决定。',
+    },
+    present: {
+        selves: '评论者是故事里出现过的、真实存在于剧情中的角色们，此刻正处于剧情发生的同一时间线上，是当场、实时的反应——不是事后回忆，而是正在经历这一切时的辩解、争吵、吐槽。',
+        locals: '评论者是与主线角色同一时代、但没有直接卷入剧情的普通人、路人、网友，是了解这个世界背景设定的"自己人"，正在实时围观这段剧情的发生，反应更像真实网友的即时吃瓜、起哄、玩梗。',
+        mixed: '评论者里既有正在经历这段剧情的当事人，也有同时代实时围观的路人网友，两者混在一起，一边是当事人的辩解，一边是路人的起哄，具体每条评论是哪一类身份由你自由决定。',
+    },
+    future: {
+        forum: '评论者是未来网络论坛上的普通网友、吃瓜群众、历史爱好者，互相评论、吐槽、争论。',
+        historian: '评论者是未来的历史学者、研究者，讨论史料、因果、评价与争议，语气更严谨但也可以有派系分歧。',
+        descendants: '评论者是当事人的后代，看到祖先这段历史后的吐槽、尴尬、骄傲或争论。',
+        news: '评论者是未来新闻节目里的主持人、记者、专家，讨论这段历史。',
+        selves: '评论者是故事里出现过的真实角色们，但已经是许多年后的他们——是在回忆、反思，甚至试图翻案、否认、重新解释当年这段经历，语气里带着岁月沉淀后的复杂心态（可能懊悔，可能释怀，可能依然嘴硬）。',
+        mixed: '评论者身份不固定，未来网友、历史学者、当事人后代、未来新闻记者、多年后的当事人本人等不同身份自然混杂出现，各自视角不同，具体每条评论是哪一类身份由你自由决定。',
+    },
 };
 
 function getSettings() {
@@ -44,10 +99,39 @@ function getSettings() {
         ctx.extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
     const settings = ctx.extensionSettings[MODULE_NAME];
-    // 兼容老用户：补全新版本新增的字段，避免旧的 settings 对象缺字段报错
+
+    // 兼容老用户：补全新版本新增的字段，避免旧的 settings 对象缺字段报错。
+    // 注意：用 structuredClone 逐个克隆默认值，避免多个用户的 settings 意外共享同一个对象引用。
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
-        if (!(key in settings)) settings[key] = DEFAULT_SETTINGS[key];
+        if (!(key in settings)) {
+            settings[key] = structuredClone(DEFAULT_SETTINGS[key]);
+        }
     }
+    if (!settings.customApi || typeof settings.customApi !== 'object') {
+        settings.customApi = structuredClone(DEFAULT_SETTINGS.customApi);
+    } else {
+        for (const key of Object.keys(DEFAULT_SETTINGS.customApi)) {
+            if (!(key in settings.customApi)) {
+                settings.customApi[key] = DEFAULT_SETTINGS.customApi[key];
+            }
+        }
+    }
+
+    // 兼容 v0.3.0 及更早版本：把旧的 mode/time 字段迁移成新的 timeDirection/identity
+    if (settings.mode && !settings._migratedV4) {
+        settings.timeDirection = 'future';
+        settings.identity = settings.mode;
+        settings._migratedV4 = true;
+        delete settings.mode;
+        delete settings.time;
+    }
+
+    // 兜底：确保 identity 在当前 timeDirection 下是个合法值
+    const validIdentities = (IDENTITY_OPTIONS[settings.timeDirection] || IDENTITY_OPTIONS.future).map(o => o.value);
+    if (!validIdentities.includes(settings.identity)) {
+        settings.identity = validIdentities[0];
+    }
+
     return settings;
 }
 
@@ -87,42 +171,86 @@ function getRecentChat() {
 
 function buildPrompt(story) {
     const settings = getSettings();
-    const mode = MODES[settings.mode] || MODES.forum;
-    const timeMap = {
-        '50': '假设事件发生后约50年。',
-        '200': '假设事件发生后约200年。',
-        '500': '假设事件发生后约500年。',
-        '1000': '假设事件发生后约1000年。',
-        modern: '假设这段历史一直流传到类似现代的网络时代。',
-    };
+    const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
+    const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
+    const identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
 
-    return `你是"未来观测器"。
+    return `你是"观察者论坛"。
 
-${timeMap[settings.time] || timeMap['200']}
-${mode}
+【时间背景】
+${DIRECTION_TEXT[direction]}
 
-请把下面的剧情片段视为已经发生的历史资料，生成一段与当前主线完全分离的"后世评论区"。
+【评论者身份】
+${identityText}
+
+请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一段与当前主线完全分离的"观察者论坛"评论区。
 
 【严格规则】
 1. 这不是主线续写，不得继续当前剧情。
-2. 未来评论不会被当前任何角色看到，不得改变当前世界状态。
-3. 不得把评论中的推测当成事实，也不得凭空补充关键历史。
+2. 这些评论不会被当前任何角色看到，不得改变当前世界状态。
+3. 不得把评论中的推测当成事实，也不得凭空补充关键剧情。
 4. 可以出现误解、争论、玩梗、不同立场；评论者可以理解错，但不要让所有人都同一种看法。
 5. 评论重点放在这段剧情中真正发生的事件、人物行为和结果。
-6. 生成 6～8 条短评论，每条约20～80字。
-7. 评论者身份要有明显差异，例如网友、学者、后代、记者等。
-8. 要像真实的人讨论历史，不要写成论文。
+6. 生成 6～8 条主楼评论，每条约20～80字。
+7. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则评论者之间身份要有明显差异。
+8. 要像真实的人讨论，不要写成论文。
 9. 不要出现"作为AI""提示词""主线"等元话语。
 10. 最后不要总结，不要解释生成过程。
 
-【历史片段】
+【楼中楼规则】
+- 部分主楼（不是全部，具体几楼有回复、有没有回复，你自己判断，也可以完全没有）会引出1~2条"跟帖"回复，模拟真实论坛里热门楼层有人接话吵/附和、冷门楼层没人理的自然分布。
+- 跟帖要针对上一楼的具体内容做回应（附和、反驳、追问、玩梗），不要变成另一条无关评论。
+- 用类似下面的格式区分主楼和跟帖（楼层编号连续往下排，跟帖用缩进和"回复X楼"标出）：
+1楼 - 某某：……
+    └ 2楼 - 某某 回复1楼：……
+3楼 - 某某：……
+
+【剧情片段】
 ${story}
 
-【未来评论】`;
+【观察者评论】`;
+}
+
+async function callCustomApi(prompt, apiConfig) {
+    let url = String(apiConfig.endpoint || '').trim();
+    if (!url) {
+        throw new Error('自定义API的端点URL没有填写');
+    }
+    if (!/\/(chat\/completions)\/?$/.test(url)) {
+        url = url.replace(/\/+$/, '') + '/chat/completions';
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiConfig.apiKey) {
+        headers['Authorization'] = `Bearer ${apiConfig.apiKey}`;
+    }
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+            model: apiConfig.model || undefined,
+            messages: [{ role: 'user', content: prompt }],
+            stream: false,
+        }),
+    });
+
+    if (!response.ok) {
+        let detail = '';
+        try { detail = (await response.text()).slice(0, 300); } catch { /* 忽略读取失败 */ }
+        throw new Error(`自定义API请求失败（状态码 ${response.status}）${detail ? '：' + detail : ''}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+        throw new Error('自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
+    }
+    return content;
 }
 
 async function generateObservation() {
-    // 用 class 选择器，settings 抽屉里的结果框和悬浮球弹窗里的结果框会同时更新，天然保持同步
+    // 用 class 选择器，设置抽屉里的结果框和悬浮球弹窗里的结果框会同时更新，天然保持同步
     const resultBoxes = $('.future-observer-result');
     const buttons = $('.future-observer-generate-btn');
 
@@ -133,54 +261,88 @@ async function generateObservation() {
     }
 
     buttons.prop('disabled', true).text('观测中…');
-    resultBoxes.text('🔭 正在观察未来……');
+    resultBoxes.text('🔭 正在观察……');
 
     try {
-        const ctx = getContext();
-        let generateQuietPrompt = ctx.generateQuietPrompt;
-        if (typeof generateQuietPrompt !== 'function') {
-            ({ generateQuietPrompt } = await import('../../../../script.js'));
-        }
+        const settings = getSettings();
         const prompt = buildPrompt(story);
+        let result;
 
-        const result = await generateQuietPrompt({
-            quietPrompt: prompt,
-            quietToLoud: false,
-        });
+        if (settings.customApi?.enabled) {
+            result = await callCustomApi(prompt, settings.customApi);
+        } else {
+            const ctx = getContext();
+            let generateQuietPrompt = ctx.generateQuietPrompt;
+            if (typeof generateQuietPrompt !== 'function') {
+                ({ generateQuietPrompt } = await import('../../../../script.js'));
+            }
+            result = await generateQuietPrompt({
+                quietPrompt: prompt,
+                quietToLoud: false,
+            });
+        }
 
-        resultBoxes.text(String(result || '未来观测没有得到结果。').trim());
+        resultBoxes.text(String(result || '没有得到结果。').trim());
     } catch (error) {
-        console.error('[Future Observer]', error);
-        resultBoxes.text(`生成失败：${error?.message || error}`);
-        toastr.error('未来观测生成失败，请打开控制台查看错误。');
+        console.error('[观察者论坛]', error);
+        let msg = error?.message || String(error);
+        if (error instanceof TypeError) {
+            msg += '（可能是网络问题，或者对方接口不支持浏览器直连的跨域访问 CORS，请检查端点地址是否正确）';
+        }
+        resultBoxes.text(`生成失败：${msg}`);
+        toastr.error('观测生成失败，请打开控制台查看错误。');
     } finally {
-        buttons.prop('disabled', false).text('🔭 查看未来评价');
+        buttons.prop('disabled', false).text('🔭 查看观测评价');
     }
+}
+
+function renderIdentityOptions($select, direction, currentValue) {
+    const options = IDENTITY_OPTIONS[direction] || IDENTITY_OPTIONS.future;
+    $select.empty();
+    for (const opt of options) {
+        $select.append($('<option>', { value: opt.value, text: opt.label }));
+    }
+    const validValues = options.map(o => o.value);
+    $select.val(validValues.includes(currentValue) ? currentValue : validValues[0]);
 }
 
 function syncControlsFromSettings() {
     const settings = getSettings();
+
     $('#future-observer-count').val(settings.messageCount);
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
-    $('.future-observer-mode-select').val(settings.mode);
-    $('.future-observer-time-select').val(settings.time);
+
+    $('.future-observer-direction-select').val(settings.timeDirection);
+    $('.future-observer-identity-select').each(function () {
+        renderIdentityOptions($(this), settings.timeDirection, settings.identity);
+    });
+
+    $('#future-observer-customapi-toggle').prop('checked', !!settings.customApi?.enabled);
+    $('#future-observer-customapi-fields').toggle(!!settings.customApi?.enabled);
+    $('#future-observer-customapi-endpoint').val(settings.customApi?.endpoint || '');
+    $('#future-observer-customapi-key').val(settings.customApi?.apiKey || '');
+    $('#future-observer-customapi-model').val(settings.customApi?.model || '');
 }
 
 function bindSharedControls() {
     // 用事件委托 + 命名空间，避免重复绑定；class 选择器保证设置抽屉和悬浮球弹窗共用同一套逻辑
-    $(document).off('change.futureObserverMode').on('change.futureObserverMode', '.future-observer-mode-select', function () {
+    $(document).off('change.futureObserverDirection').on('change.futureObserverDirection', '.future-observer-direction-select', function () {
         const settings = getSettings();
-        settings.mode = String($(this).val());
-        $('.future-observer-mode-select').val(settings.mode);
+        settings.timeDirection = String($(this).val());
+        const validIdentities = (IDENTITY_OPTIONS[settings.timeDirection] || IDENTITY_OPTIONS.future).map(o => o.value);
+        if (!validIdentities.includes(settings.identity)) {
+            settings.identity = validIdentities[0];
+        }
         saveSettings();
+        syncControlsFromSettings();
     });
 
-    $(document).off('change.futureObserverTime').on('change.futureObserverTime', '.future-observer-time-select', function () {
+    $(document).off('change.futureObserverIdentity').on('change.futureObserverIdentity', '.future-observer-identity-select', function () {
         const settings = getSettings();
-        settings.time = String($(this).val());
-        $('.future-observer-time-select').val(settings.time);
+        settings.identity = String($(this).val());
         saveSettings();
+        syncControlsFromSettings();
     });
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
@@ -204,6 +366,31 @@ function bindSharedControls() {
         settings.fabEnabled = $(this).is(':checked');
         saveSettings();
         applyFabVisibility();
+    });
+
+    $('#future-observer-customapi-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.customApi.enabled = $(this).is(':checked');
+        saveSettings();
+        $('#future-observer-customapi-fields').toggle(settings.customApi.enabled);
+    });
+
+    $('#future-observer-customapi-endpoint').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.customApi.endpoint = String($(this).val()).trim();
+        saveSettings();
+    });
+
+    $('#future-observer-customapi-key').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.customApi.apiKey = String($(this).val()).trim();
+        saveSettings();
+    });
+
+    $('#future-observer-customapi-model').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.customApi.model = String($(this).val()).trim();
+        saveSettings();
     });
 }
 
@@ -233,33 +420,25 @@ function buildFloatingUI() {
     if ($('#future-observer-fab').length) return;
 
     const fab = $(
-        '<div id="future-observer-fab" class="future-observer-fab" title="未来观测器（可拖动）">🔭</div>',
+        '<div id="future-observer-fab" class="future-observer-fab" title="观察者论坛（可拖动）">🔭</div>',
     );
 
     const popup = $(`
         <div id="future-observer-popup" class="future-observer-popup" style="display:none;">
             <div class="future-observer-popup-header">
-                <span>🔭 未来观测</span>
+                <span>🔭 观察者论坛</span>
                 <span id="future-observer-popup-close" class="future-observer-popup-close" title="关闭">✕</span>
             </div>
             <div class="future-observer-popup-controls">
-                <select class="future-observer-mode-select">
-                    <option value="forum">未来网友</option>
-                    <option value="historian">历史学者</option>
-                    <option value="descendants">当事人后代</option>
-                    <option value="news">未来新闻</option>
-                    <option value="mixed">混合模式</option>
+                <select class="future-observer-direction-select">
+                    <option value="past">过去</option>
+                    <option value="present">现在</option>
+                    <option value="future">未来</option>
                 </select>
-                <select class="future-observer-time-select">
-                    <option value="50">50年后</option>
-                    <option value="200">200年后</option>
-                    <option value="500">500年后</option>
-                    <option value="1000">1000年后</option>
-                    <option value="modern">现代网络时代</option>
-                </select>
+                <select class="future-observer-identity-select"></select>
             </div>
-            <button class="menu_button future-observer-generate-btn">🔭 查看未来评价</button>
-            <div class="future-observer-result future-observer-popup-result">点击"查看未来评价"生成。</div>
+            <button class="menu_button future-observer-generate-btn">🔭 查看观测评价</button>
+            <div class="future-observer-result future-observer-popup-result">点击"查看观测评价"生成。</div>
         </div>
     `);
 
@@ -268,6 +447,7 @@ function buildFloatingUI() {
     applyFabPosition(fab);
     makeDraggable(fab);
     applyFabVisibility();
+    syncControlsFromSettings();
 
     $(document).off('click.futureObserverPopupClose').on('click.futureObserverPopupClose', '#future-observer-popup-close', () => {
         popup.hide();
@@ -407,7 +587,7 @@ jQuery(async () => {
         await loadSettingsUI();
         buildFloatingUI();
     } catch (error) {
-        console.error('[Future Observer] Failed to load UI:', error);
-        toastr.error('Future Observer 插件界面加载失败，请查看控制台（F12）获取详细报错。', 'Future Observer');
+        console.error('[观察者论坛] Failed to load UI:', error);
+        toastr.error('观察者论坛插件界面加载失败，请查看控制台（F12）获取详细报错。', '观察者论坛');
     }
 });

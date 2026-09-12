@@ -1,44 +1,58 @@
 <div id="future-observer-settings" class="future-observer-settings">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>🔭 Future Observer · 未来观测</b>
+            <b>🔭 观察者论坛</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
             <div class="future-observer-desc">
-                把当前剧情当作已经发生的历史，生成与主线分离的后世评价、吐槽与争论。
+                把当前剧情放到过去/现在/未来任意一个时间方向去观察，生成与主线分离的评论、吐槽与争论。
             </div>
             <div class="future-observer-row">
                 <label>读取最近 <input id="future-observer-count" type="number" min="1" max="50"> 楼</label>
                 <label>最多读取 <input id="future-observer-maxchars" type="number" min="2000" max="30000" step="1000"> 字符</label>
             </div>
             <div class="future-observer-row">
-                <label>评论模式</label>
-                <select id="future-observer-mode" class="future-observer-mode-select">
-                    <option value="forum">未来网友</option>
-                    <option value="historian">历史学者</option>
-                    <option value="descendants">当事人后代</option>
-                    <option value="news">未来新闻</option>
-                    <option value="mixed">混合模式</option>
+                <label>时间方向</label>
+                <select class="future-observer-direction-select">
+                    <option value="past">过去</option>
+                    <option value="present">现在</option>
+                    <option value="future">未来</option>
                 </select>
-                <label>时间跨度</label>
-                <select id="future-observer-time" class="future-observer-time-select">
-                    <option value="50">50年后</option>
-                    <option value="200">200年后</option>
-                    <option value="500">500年后</option>
-                    <option value="1000">1000年后</option>
-                    <option value="modern">现代网络时代</option>
-                </select>
+                <label>身份视角</label>
+                <select class="future-observer-identity-select"></select>
             </div>
             <div class="future-observer-row">
                 <label><input type="checkbox" id="future-observer-fab-toggle"> 显示悬浮球快捷入口</label>
             </div>
+
+            <div class="future-observer-row">
+                <label><input type="checkbox" id="future-observer-customapi-toggle"> 使用自定义API（不走酒馆主线连接）</label>
+            </div>
+            <div id="future-observer-customapi-fields" class="future-observer-customapi-fields" style="display:none;">
+                <div class="future-observer-row">
+                    <label>端点 URL</label>
+                    <input type="text" id="future-observer-customapi-endpoint" placeholder="https://your-proxy.com/v1">
+                </div>
+                <div class="future-observer-row">
+                    <label>API 密钥</label>
+                    <input type="password" id="future-observer-customapi-key" placeholder="sk-...">
+                </div>
+                <div class="future-observer-row">
+                    <label>模型名称</label>
+                    <input type="text" id="future-observer-customapi-model" placeholder="例如 gpt-4o-mini、deepseek-chat">
+                </div>
+                <div class="future-observer-customapi-note">
+                    ⚠️ 密钥会以明文形式保存在酒馆的插件设置里，不是酒馆官方推荐的加密存储方式。请不要把你的设置文件/设置截图分享给他人，仅在自己使用的设备上填写。
+                </div>
+            </div>
+
             <div class="future-observer-action">
-                <button id="future-observer-generate" class="menu_button future-observer-generate-btn">🔭 查看未来评价</button>
+                <button id="future-observer-generate" class="menu_button future-observer-generate-btn">🔭 查看观测评价</button>
             </div>
             <details class="future-observer-result-details">
-                <summary>▶ 未来评论</summary>
-                <div id="future-observer-result" class="future-observer-result">点击“查看未来评价”生成。</div>
+                <summary>▶ 观测评论</summary>
+                <div id="future-observer-result" class="future-observer-result">点击"查看观测评价"生成。</div>
             </details>
         </div>
     </div>

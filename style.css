@@ -2,12 +2,27 @@
 .future-observer-desc{opacity:.8;margin-bottom:10px;line-height:1.45}
 .future-observer-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:7px 0}
 .future-observer-row label{display:flex;gap:5px;align-items:center}
-.future-observer-row input{width:70px}
-.future-observer-row select{max-width:180px}
+.future-observer-row input[type="number"]{width:70px}
+.future-observer-row input[type="text"],
+.future-observer-row input[type="password"]{flex:1;min-width:200px}
+.future-observer-row select{max-width:220px}
 .future-observer-action{margin:10px 0}
 .future-observer-result-details{margin-top:8px}
 .future-observer-result-details summary{cursor:pointer;user-select:none}
 .future-observer-result{white-space:pre-wrap;line-height:1.6;margin-top:8px;padding:8px;border-radius:6px;background:rgba(127,127,127,.08)}
+
+.future-observer-customapi-fields{
+    margin:4px 0 10px 4px;
+    padding:8px 10px;
+    border-left:2px solid rgba(255,255,255,.15);
+}
+.future-observer-customapi-note{
+    opacity:.75;
+    font-size:.85em;
+    line-height:1.5;
+    margin-top:4px;
+    color:#e0a95c;
+}
 
 /* 悬浮球 */
 .future-observer-fab{
@@ -58,10 +73,11 @@
 .future-observer-popup-close:hover{opacity:1}
 .future-observer-popup-controls{
     display:flex;
+    flex-direction:column;
     gap:6px;
     padding:8px 10px;
 }
-.future-observer-popup-controls select{flex:1;min-width:0}
+.future-observer-popup-controls select{width:100%;max-width:none}
 .future-observer-popup > .menu_button{margin:0 10px 8px}
 .future-observer-popup-result{
     margin:0 10px 10px;
