@@ -1,4 +1,4 @@
-# Future Observer / 未来观测 v0.2.0
+# Future Observer / 未来观测 v0.3.0
 
 SillyTavern UI Extension.
 
@@ -9,3 +9,7 @@ SillyTavern UI Extension.
 安装并启用后，在扩展设置中找到“🔭 Future Observer · 未来观测”。
 
 生成使用 SillyTavern 的 quiet generation，因此不会作为新消息写入当前聊天。
+
+## v0.3.0 新增：悬浮球快捷入口
+
+屏幕上会出现一个可拖动的 🔭 悬浮球，单击展开小面板即可直接生成、查看结果，不用每次都打开扩展设置抽屉。悬浮球位置会自动记住；如果不需要，可以在扩展设置里的“显示悬浮球快捷入口”取消勾选来关闭。

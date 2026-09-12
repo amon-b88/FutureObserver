@@ -14,7 +14,7 @@
             </div>
             <div class="future-observer-row">
                 <label>评论模式</label>
-                <select id="future-observer-mode">
+                <select id="future-observer-mode" class="future-observer-mode-select">
                     <option value="forum">未来网友</option>
                     <option value="historian">历史学者</option>
                     <option value="descendants">当事人后代</option>
@@ -22,7 +22,7 @@
                     <option value="mixed">混合模式</option>
                 </select>
                 <label>时间跨度</label>
-                <select id="future-observer-time">
+                <select id="future-observer-time" class="future-observer-time-select">
                     <option value="50">50年后</option>
                     <option value="200">200年后</option>
                     <option value="500">500年后</option>
@@ -30,8 +30,11 @@
                     <option value="modern">现代网络时代</option>
                 </select>
             </div>
+            <div class="future-observer-row">
+                <label><input type="checkbox" id="future-observer-fab-toggle"> 显示悬浮球快捷入口</label>
+            </div>
             <div class="future-observer-action">
-                <button id="future-observer-generate" class="menu_button">🔭 查看未来评价</button>
+                <button id="future-observer-generate" class="menu_button future-observer-generate-btn">🔭 查看未来评价</button>
             </div>
             <details class="future-observer-result-details">
                 <summary>▶ 未来评论</summary>

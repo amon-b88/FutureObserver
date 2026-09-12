@@ -8,3 +8,63 @@
 .future-observer-result-details{margin-top:8px}
 .future-observer-result-details summary{cursor:pointer;user-select:none}
 .future-observer-result{white-space:pre-wrap;line-height:1.6;margin-top:8px;padding:8px;border-radius:6px;background:rgba(127,127,127,.08)}
+
+/* 悬浮球 */
+.future-observer-fab{
+    position:fixed;
+    right:20px;
+    bottom:120px;
+    width:48px;
+    height:48px;
+    border-radius:50%;
+    background:rgba(30,30,30,.88);
+    border:1px solid rgba(255,255,255,.15);
+    color:#fff;
+    font-size:22px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    cursor:grab;
+    z-index:9999;
+    box-shadow:0 2px 8px rgba(0,0,0,.4);
+    user-select:none;
+    touch-action:none;
+}
+.future-observer-fab:active{cursor:grabbing}
+
+/* 悬浮弹窗 */
+.future-observer-popup{
+    position:fixed;
+    width:280px;
+    max-height:60vh;
+    background:rgba(20,20,20,.96);
+    border:1px solid rgba(255,255,255,.15);
+    border-radius:10px;
+    box-shadow:0 4px 16px rgba(0,0,0,.5);
+    z-index:9999;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+}
+.future-observer-popup-header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:8px 10px;
+    font-weight:bold;
+    border-bottom:1px solid rgba(255,255,255,.1);
+}
+.future-observer-popup-close{cursor:pointer;opacity:.7}
+.future-observer-popup-close:hover{opacity:1}
+.future-observer-popup-controls{
+    display:flex;
+    gap:6px;
+    padding:8px 10px;
+}
+.future-observer-popup-controls select{flex:1;min-width:0}
+.future-observer-popup > .menu_button{margin:0 10px 8px}
+.future-observer-popup-result{
+    margin:0 10px 10px;
+    overflow-y:auto;
+    max-height:30vh;
+}
