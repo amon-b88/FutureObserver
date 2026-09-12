@@ -1,0 +1,42 @@
+<div id="future-observer-settings" class="future-observer-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>🔭 Future Observer · 未来观测</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <div class="future-observer-desc">
+                把当前剧情当作已经发生的历史，生成与主线分离的后世评价、吐槽与争论。
+            </div>
+            <div class="future-observer-row">
+                <label>读取最近 <input id="future-observer-count" type="number" min="1" max="50"> 楼</label>
+                <label>最多读取 <input id="future-observer-maxchars" type="number" min="2000" max="30000" step="1000"> 字符</label>
+            </div>
+            <div class="future-observer-row">
+                <label>评论模式</label>
+                <select id="future-observer-mode">
+                    <option value="forum">未来网友</option>
+                    <option value="historian">历史学者</option>
+                    <option value="descendants">当事人后代</option>
+                    <option value="news">未来新闻</option>
+                    <option value="mixed">混合模式</option>
+                </select>
+                <label>时间跨度</label>
+                <select id="future-observer-time">
+                    <option value="50">50年后</option>
+                    <option value="200">200年后</option>
+                    <option value="500">500年后</option>
+                    <option value="1000">1000年后</option>
+                    <option value="modern">现代网络时代</option>
+                </select>
+            </div>
+            <div class="future-observer-action">
+                <button id="future-observer-generate" class="menu_button">🔭 查看未来评价</button>
+            </div>
+            <details class="future-observer-result-details">
+                <summary>▶ 未来评论</summary>
+                <div id="future-observer-result" class="future-observer-result">点击“查看未来评价”生成。</div>
+            </details>
+        </div>
+    </div>
+</div>
