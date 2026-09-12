@@ -1,6 +1,13 @@
-import { getContext } from '../../../../script.js';
-
 console.log('[Future Observer] index.js 文件已加载并开始执行');
+
+// 说明：较新版本的 SillyTavern 不再从 script.js 具名导出 getContext，
+// 而是统一通过全局的 SillyTavern.getContext() 获取上下文。
+// 之前用 `import { getContext } from '../../../../script.js'` 会在
+// 模块解析阶段直接抛出 SyntaxError（整份文件都不会被执行，
+// 且这种报错不带任何自定义前缀，容易被日志筛选漏掉）。
+function getContext() {
+    return SillyTavern.getContext();
+}
 
 const MODULE_NAME = 'future_observer';
 
@@ -126,7 +133,13 @@ async function generateObservation() {
     resultBox.text('🔭 正在观察未来……');
 
     try {
-        const { generateQuietPrompt } = await import('../../../../script.js');
+        // 优先从 SillyTavern.getContext() 拿 generateQuietPrompt（新版更可靠），
+        // 拿不到时再回退到旧的直接 import 方式做兼容。
+        const ctx = getContext();
+        let generateQuietPrompt = ctx.generateQuietPrompt;
+        if (typeof generateQuietPrompt !== 'function') {
+            ({ generateQuietPrompt } = await import('../../../../script.js'));
+        }
         const prompt = buildPrompt(story);
 
         const result = await generateQuietPrompt({
