@@ -1,0 +1,12 @@
+{
+  "display_name": "Future Observer",
+  "loading_order": 10,
+  "requires": [],
+  "optional": [],
+  "dependencies": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "OpenAI",
+  "version": "0.1.0",
+  "homePage": ""
+}
