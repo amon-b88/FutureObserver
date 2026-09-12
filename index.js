@@ -1,5 +1,7 @@
 import { getContext } from '../../../../script.js';
 
+console.log('[Future Observer] index.js 文件已加载并开始执行');
+
 const MODULE_NAME = 'future_observer';
 
 // 动态计算扩展在 third-party 下的真实文件夹名，
@@ -143,10 +145,16 @@ async function generateObservation() {
 }
 
 async function loadSettingsUI() {
+    console.log('[Future Observer] loadSettingsUI 开始执行');
+
     const ctx = getContext();
+    console.log('[Future Observer] getContext() 成功:', !!ctx);
+
     const settings = getSettings();
+    console.log('[Future Observer] getSettings() 成功:', settings);
 
     if (!$('#future-observer-settings').length) {
+        console.log('[Future Observer] 准备调用 renderExtensionTemplateAsync，EXTENSION_NAME =', EXTENSION_NAME);
         const html = await ctx.renderExtensionTemplateAsync(
             EXTENSION_NAME,
             'settings',
@@ -155,7 +163,16 @@ async function loadSettingsUI() {
                 maxChars: settings.maxChars,
             },
         );
-        $('#extensions_settings2').append(html);
+        console.log('[Future Observer] renderExtensionTemplateAsync 返回, html长度:', html ? html.length : '空');
+
+        const target = $('#extensions_settings2');
+        console.log('[Future Observer] #extensions_settings2 是否存在:', target.length);
+
+        target.append(html);
+
+        console.log('[Future Observer] append 完成，设置区块现在是否存在:', $('#future-observer-settings').length);
+    } else {
+        console.log('[Future Observer] #future-observer-settings 已存在，跳过重复渲染');
     }
 
     $('#future-observer-count').val(settings.messageCount);
@@ -188,12 +205,18 @@ async function loadSettingsUI() {
     $('#future-observer-generate').off('click').on('click', generateObservation);
 }
 
+console.log('[Future Observer] 即将注册 jQuery(ready) 回调, document.readyState =', document.readyState);
+
 jQuery(async () => {
+    console.log('[Future Observer] jQuery(ready) 回调已触发');
     try {
         await loadSettingsUI();
+        console.log('[Future Observer] loadSettingsUI 执行完毕，没有抛出异常');
     } catch (error) {
         console.error('[Future Observer] Failed to load UI:', error);
         // 加一条可见提示，避免设置面板“悄无声息地”不显示
         toastr.error('Future Observer 插件界面加载失败，请查看控制台（F12）获取详细报错。', 'Future Observer');
     }
 });
+
+console.log('[Future Observer] index.js 同步部分执行完毕');
