@@ -1,10 +1,5 @@
-console.log('[Future Observer] index.js 文件已加载并开始执行');
-
 // 说明：较新版本的 SillyTavern 不再从 script.js 具名导出 getContext，
 // 而是统一通过全局的 SillyTavern.getContext() 获取上下文。
-// 之前用 `import { getContext } from '../../../../script.js'` 会在
-// 模块解析阶段直接抛出 SyntaxError（整份文件都不会被执行，
-// 且这种报错不带任何自定义前缀，容易被日志筛选漏掉）。
 function getContext() {
     return SillyTavern.getContext();
 }
@@ -20,7 +15,6 @@ const EXTENSION_NAME = (() => {
     if (idx !== -1 && parts[idx + 1]) {
         return `third-party/${parts[idx + 1]}`;
     }
-    // 兜底：万一路径结构变化，退回原来的名字
     console.warn('[Future Observer] 无法从 import.meta.url 解析出扩展文件夹名，使用默认值。当前 url:', import.meta.url);
     return 'third-party/FutureObserver';
 })();
@@ -30,6 +24,9 @@ const DEFAULT_SETTINGS = Object.freeze({
     maxChars: 14000,
     mode: 'forum',
     time: '200',
+    fabEnabled: true,
+    fabX: null,
+    fabY: null,
 });
 
 const MODES = {
@@ -46,7 +43,12 @@ function getSettings() {
     if (!ctx.extensionSettings[MODULE_NAME]) {
         ctx.extensionSettings[MODULE_NAME] = structuredClone(DEFAULT_SETTINGS);
     }
-    return ctx.extensionSettings[MODULE_NAME];
+    const settings = ctx.extensionSettings[MODULE_NAME];
+    // 兼容老用户：补全新版本新增的字段，避免旧的 settings 对象缺字段报错
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+        if (!(key in settings)) settings[key] = DEFAULT_SETTINGS[key];
+    }
+    return settings;
 }
 
 function saveSettings() {
@@ -94,12 +96,12 @@ function buildPrompt(story) {
         modern: '假设这段历史一直流传到类似现代的网络时代。',
     };
 
-    return `你是“未来观测器”。
+    return `你是"未来观测器"。
 
 ${timeMap[settings.time] || timeMap['200']}
 ${mode}
 
-请把下面的剧情片段视为已经发生的历史资料，生成一段与当前主线完全分离的“后世评论区”。
+请把下面的剧情片段视为已经发生的历史资料，生成一段与当前主线完全分离的"后世评论区"。
 
 【严格规则】
 1. 这不是主线续写，不得继续当前剧情。
@@ -110,7 +112,7 @@ ${mode}
 6. 生成 6～8 条短评论，每条约20～80字。
 7. 评论者身份要有明显差异，例如网友、学者、后代、记者等。
 8. 要像真实的人讨论历史，不要写成论文。
-9. 不要出现“作为AI”“提示词”“主线”等元话语。
+9. 不要出现"作为AI""提示词""主线"等元话语。
 10. 最后不要总结，不要解释生成过程。
 
 【历史片段】
@@ -120,8 +122,9 @@ ${story}
 }
 
 async function generateObservation() {
-    const resultBox = $('#future-observer-result');
-    const button = $('#future-observer-generate');
+    // 用 class 选择器，settings 抽屉里的结果框和悬浮球弹窗里的结果框会同时更新，天然保持同步
+    const resultBoxes = $('.future-observer-result');
+    const buttons = $('.future-observer-generate-btn');
 
     const story = getRecentChat();
     if (!story) {
@@ -129,12 +132,10 @@ async function generateObservation() {
         return;
     }
 
-    button.prop('disabled', true).text('观测中…');
-    resultBox.text('🔭 正在观察未来……');
+    buttons.prop('disabled', true).text('观测中…');
+    resultBoxes.text('🔭 正在观察未来……');
 
     try {
-        // 优先从 SillyTavern.getContext() 拿 generateQuietPrompt（新版更可靠），
-        // 拿不到时再回退到旧的直接 import 方式做兼容。
         const ctx = getContext();
         let generateQuietPrompt = ctx.generateQuietPrompt;
         if (typeof generateQuietPrompt !== 'function') {
@@ -147,27 +148,70 @@ async function generateObservation() {
             quietToLoud: false,
         });
 
-        resultBox.text(String(result || '未来观测没有得到结果。').trim());
+        resultBoxes.text(String(result || '未来观测没有得到结果。').trim());
     } catch (error) {
         console.error('[Future Observer]', error);
-        resultBox.text(`生成失败：${error?.message || error}`);
+        resultBoxes.text(`生成失败：${error?.message || error}`);
         toastr.error('未来观测生成失败，请打开控制台查看错误。');
     } finally {
-        button.prop('disabled', false).text('🔭 查看未来评价');
+        buttons.prop('disabled', false).text('🔭 查看未来评价');
     }
 }
 
-async function loadSettingsUI() {
-    console.log('[Future Observer] loadSettingsUI 开始执行');
-
-    const ctx = getContext();
-    console.log('[Future Observer] getContext() 成功:', !!ctx);
-
+function syncControlsFromSettings() {
     const settings = getSettings();
-    console.log('[Future Observer] getSettings() 成功:', settings);
+    $('#future-observer-count').val(settings.messageCount);
+    $('#future-observer-maxchars').val(settings.maxChars);
+    $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
+    $('.future-observer-mode-select').val(settings.mode);
+    $('.future-observer-time-select').val(settings.time);
+}
+
+function bindSharedControls() {
+    // 用事件委托 + 命名空间，避免重复绑定；class 选择器保证设置抽屉和悬浮球弹窗共用同一套逻辑
+    $(document).off('change.futureObserverMode').on('change.futureObserverMode', '.future-observer-mode-select', function () {
+        const settings = getSettings();
+        settings.mode = String($(this).val());
+        $('.future-observer-mode-select').val(settings.mode);
+        saveSettings();
+    });
+
+    $(document).off('change.futureObserverTime').on('change.futureObserverTime', '.future-observer-time-select', function () {
+        const settings = getSettings();
+        settings.time = String($(this).val());
+        $('.future-observer-time-select').val(settings.time);
+        saveSettings();
+    });
+
+    $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
+
+    $('#future-observer-count').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.messageCount = Math.max(1, Math.min(50, Number($(this).val()) || 10));
+        $(this).val(settings.messageCount);
+        saveSettings();
+    });
+
+    $('#future-observer-maxchars').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.maxChars = Math.max(2000, Math.min(30000, Number($(this).val()) || 14000));
+        $(this).val(settings.maxChars);
+        saveSettings();
+    });
+
+    $('#future-observer-fab-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.fabEnabled = $(this).is(':checked');
+        saveSettings();
+        applyFabVisibility();
+    });
+}
+
+async function loadSettingsUI() {
+    const ctx = getContext();
+    const settings = getSettings();
 
     if (!$('#future-observer-settings').length) {
-        console.log('[Future Observer] 准备调用 renderExtensionTemplateAsync，EXTENSION_NAME =', EXTENSION_NAME);
         const html = await ctx.renderExtensionTemplateAsync(
             EXTENSION_NAME,
             'settings',
@@ -176,60 +220,194 @@ async function loadSettingsUI() {
                 maxChars: settings.maxChars,
             },
         );
-        console.log('[Future Observer] renderExtensionTemplateAsync 返回, html长度:', html ? html.length : '空');
-
-        const target = $('#extensions_settings2');
-        console.log('[Future Observer] #extensions_settings2 是否存在:', target.length);
-
-        target.append(html);
-
-        console.log('[Future Observer] append 完成，设置区块现在是否存在:', $('#future-observer-settings').length);
-    } else {
-        console.log('[Future Observer] #future-observer-settings 已存在，跳过重复渲染');
+        $('#extensions_settings2').append(html);
     }
 
-    $('#future-observer-count').val(settings.messageCount);
-    $('#future-observer-maxchars').val(settings.maxChars);
-    $('#future-observer-mode').val(settings.mode);
-    $('#future-observer-time').val(settings.time);
-
-    $('#future-observer-count').off('change').on('change', function () {
-        settings.messageCount = Math.max(1, Math.min(50, Number($(this).val()) || 10));
-        $(this).val(settings.messageCount);
-        saveSettings();
-    });
-
-    $('#future-observer-maxchars').off('change').on('change', function () {
-        settings.maxChars = Math.max(2000, Math.min(30000, Number($(this).val()) || 14000));
-        $(this).val(settings.maxChars);
-        saveSettings();
-    });
-
-    $('#future-observer-mode').off('change').on('change', function () {
-        settings.mode = String($(this).val());
-        saveSettings();
-    });
-
-    $('#future-observer-time').off('change').on('change', function () {
-        settings.time = String($(this).val());
-        saveSettings();
-    });
-
-    $('#future-observer-generate').off('click').on('click', generateObservation);
+    syncControlsFromSettings();
+    bindSharedControls();
 }
 
-console.log('[Future Observer] 即将注册 jQuery(ready) 回调, document.readyState =', document.readyState);
+// ==================== 悬浮球 ====================
+
+function buildFloatingUI() {
+    if ($('#future-observer-fab').length) return;
+
+    const fab = $(
+        '<div id="future-observer-fab" class="future-observer-fab" title="未来观测器（可拖动）">🔭</div>',
+    );
+
+    const popup = $(`
+        <div id="future-observer-popup" class="future-observer-popup" style="display:none;">
+            <div class="future-observer-popup-header">
+                <span>🔭 未来观测</span>
+                <span id="future-observer-popup-close" class="future-observer-popup-close" title="关闭">✕</span>
+            </div>
+            <div class="future-observer-popup-controls">
+                <select class="future-observer-mode-select">
+                    <option value="forum">未来网友</option>
+                    <option value="historian">历史学者</option>
+                    <option value="descendants">当事人后代</option>
+                    <option value="news">未来新闻</option>
+                    <option value="mixed">混合模式</option>
+                </select>
+                <select class="future-observer-time-select">
+                    <option value="50">50年后</option>
+                    <option value="200">200年后</option>
+                    <option value="500">500年后</option>
+                    <option value="1000">1000年后</option>
+                    <option value="modern">现代网络时代</option>
+                </select>
+            </div>
+            <button class="menu_button future-observer-generate-btn">🔭 查看未来评价</button>
+            <div class="future-observer-result future-observer-popup-result">点击"查看未来评价"生成。</div>
+        </div>
+    `);
+
+    $('body').append(fab).append(popup);
+
+    applyFabPosition(fab);
+    makeDraggable(fab);
+    applyFabVisibility();
+
+    $(document).off('click.futureObserverPopupClose').on('click.futureObserverPopupClose', '#future-observer-popup-close', () => {
+        popup.hide();
+    });
+
+    // 点击悬浮球/弹窗以外的地方，自动收起弹窗
+    $(document).off('mousedown.futureObserverOutside touchstart.futureObserverOutside')
+        .on('mousedown.futureObserverOutside touchstart.futureObserverOutside', function (e) {
+            if (!popup.is(':visible')) return;
+            if ($(e.target).closest('#future-observer-popup, #future-observer-fab').length) return;
+            popup.hide();
+        });
+
+    $(window).off('resize.futureObserver').on('resize.futureObserver', () => {
+        if (popup.is(':visible')) positionPopupNearFab();
+    });
+}
+
+function applyFabVisibility() {
+    const settings = getSettings();
+    const fab = $('#future-observer-fab');
+    const popup = $('#future-observer-popup');
+    if (settings.fabEnabled === false) {
+        fab.hide();
+        popup.hide();
+    } else {
+        fab.show();
+    }
+}
+
+function applyFabPosition(fab) {
+    const settings = getSettings();
+    if (typeof settings.fabX === 'number' && typeof settings.fabY === 'number') {
+        fab.css({ left: settings.fabX + 'px', top: settings.fabY + 'px', right: 'auto', bottom: 'auto' });
+    }
+}
+
+function positionPopupNearFab() {
+    const fab = $('#future-observer-fab');
+    const popup = $('#future-observer-popup');
+    if (!fab.length || !popup.length) return;
+
+    const rect = fab[0].getBoundingClientRect();
+    const popupWidth = popup.outerWidth();
+    const popupHeight = popup.outerHeight();
+
+    let left = rect.left;
+    let top = rect.top - popupHeight - 10;
+
+    if (top < 10) {
+        top = rect.bottom + 10;
+    }
+    if (top + popupHeight > window.innerHeight - 10) {
+        top = Math.max(10, window.innerHeight - popupHeight - 10);
+    }
+    if (left + popupWidth > window.innerWidth - 10) {
+        left = window.innerWidth - popupWidth - 10;
+    }
+    if (left < 10) left = 10;
+
+    popup.css({ left: left + 'px', top: top + 'px' });
+}
+
+function togglePopup() {
+    const popup = $('#future-observer-popup');
+    if (popup.is(':visible')) {
+        popup.hide();
+        return;
+    }
+    syncControlsFromSettings();
+    positionPopupNearFab();
+    popup.show();
+}
+
+function makeDraggable(fab) {
+    let dragging = false;
+    let moved = false;
+    let startX = 0, startY = 0, origX = 0, origY = 0;
+
+    function pointFromEvent(e) {
+        return e.touches && e.touches.length ? e.touches[0] : e;
+    }
+
+    function onDown(e) {
+        dragging = true;
+        moved = false;
+        const p = pointFromEvent(e.originalEvent || e);
+        startX = p.clientX;
+        startY = p.clientY;
+        const rect = fab[0].getBoundingClientRect();
+        origX = rect.left;
+        origY = rect.top;
+        $(document).on('mousemove.futureObserverDrag touchmove.futureObserverDrag', onMove);
+        $(document).on('mouseup.futureObserverDrag touchend.futureObserverDrag', onUp);
+    }
+
+    function onMove(e) {
+        if (!dragging) return;
+        const p = pointFromEvent(e.originalEvent || e);
+        const dx = p.clientX - startX;
+        const dy = p.clientY - startY;
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) moved = true;
+
+        let newX = origX + dx;
+        let newY = origY + dy;
+        const maxX = window.innerWidth - fab.outerWidth();
+        const maxY = window.innerHeight - fab.outerHeight();
+        newX = Math.max(0, Math.min(newX, maxX));
+        newY = Math.max(0, Math.min(newY, maxY));
+
+        fab.css({ left: newX + 'px', top: newY + 'px', right: 'auto', bottom: 'auto' });
+
+        if ($('#future-observer-popup').is(':visible')) positionPopupNearFab();
+
+        if (e.cancelable) e.preventDefault();
+    }
+
+    function onUp() {
+        dragging = false;
+        $(document).off('.futureObserverDrag');
+        if (moved) {
+            const rect = fab[0].getBoundingClientRect();
+            const settings = getSettings();
+            settings.fabX = rect.left;
+            settings.fabY = rect.top;
+            saveSettings();
+        } else {
+            togglePopup();
+        }
+    }
+
+    fab.on('mousedown touchstart', onDown);
+}
 
 jQuery(async () => {
-    console.log('[Future Observer] jQuery(ready) 回调已触发');
     try {
         await loadSettingsUI();
-        console.log('[Future Observer] loadSettingsUI 执行完毕，没有抛出异常');
+        buildFloatingUI();
     } catch (error) {
         console.error('[Future Observer] Failed to load UI:', error);
-        // 加一条可见提示，避免设置面板“悄无声息地”不显示
         toastr.error('Future Observer 插件界面加载失败，请查看控制台（F12）获取详细报错。', 'Future Observer');
     }
 });
-
-console.log('[Future Observer] index.js 同步部分执行完毕');
