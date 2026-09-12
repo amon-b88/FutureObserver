@@ -1,7 +1,20 @@
 import { getContext } from '../../../../script.js';
 
 const MODULE_NAME = 'future_observer';
-const EXTENSION_NAME = 'third-party/FutureObserver';
+
+// 动态计算扩展在 third-party 下的真实文件夹名，
+// 避免因为 Git 仓库/文件夹名与硬编码字符串不一致导致
+// renderExtensionTemplateAsync 请求 404、UI 无法渲染的问题。
+const EXTENSION_NAME = (() => {
+    const parts = import.meta.url.split('/');
+    const idx = parts.indexOf('third-party');
+    if (idx !== -1 && parts[idx + 1]) {
+        return `third-party/${parts[idx + 1]}`;
+    }
+    // 兜底：万一路径结构变化，退回原来的名字
+    console.warn('[Future Observer] 无法从 import.meta.url 解析出扩展文件夹名，使用默认值。当前 url:', import.meta.url);
+    return 'third-party/FutureObserver';
+})();
 
 const DEFAULT_SETTINGS = Object.freeze({
     messageCount: 10,
@@ -180,5 +193,7 @@ jQuery(async () => {
         await loadSettingsUI();
     } catch (error) {
         console.error('[Future Observer] Failed to load UI:', error);
+        // 加一条可见提示，避免设置面板“悄无声息地”不显示
+        toastr.error('Future Observer 插件界面加载失败，请查看控制台（F12）获取详细报错。', 'Future Observer');
     }
 });
