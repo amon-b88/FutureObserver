@@ -30,8 +30,8 @@
 .future-observer-reply{
     padding:6px 10px;
     margin:2px 0 8px 18px;
-    border-left:2px solid rgba(127,180,255,.5);
-    background:rgba(127,180,255,.06);
+    border-left:2px solid rgba(var(--fo-accent,127,180,255),.5);
+    background:rgba(var(--fo-accent,127,180,255),.08);
     border-radius:0 8px 8px 0;
     font-size:.93em;
     line-height:1.5;
@@ -77,12 +77,14 @@
 
 /* 悬浮弹窗 */
 .future-observer-popup{
+    --fo-accent:150,150,160;
+    --fo-header-bg:rgba(255,255,255,.04);
     position:fixed;
     width:320px;
     max-width:calc(100vw - 20px);
     max-height:70vh;
     background:rgba(18,18,20,.97);
-    border:1px solid rgba(255,255,255,.15);
+    border:1px solid rgba(var(--fo-accent),.3);
     border-radius:12px;
     box-shadow:0 6px 20px rgba(0,0,0,.55);
     z-index:9999;
@@ -92,15 +94,23 @@
     box-sizing:border-box;
 }
 .future-observer-popup *{box-sizing:border-box}
+
+/* 按时间方向切换主题色：过去=复古黄褐，现在=中性绿灰，未来=科幻蓝，异世界=紫 */
+.future-observer-popup-theme-past{ --fo-accent:196,140,74; --fo-header-bg:rgba(196,140,74,.14); }
+.future-observer-popup-theme-present{ --fo-accent:120,190,150; --fo-header-bg:rgba(120,190,150,.10); }
+.future-observer-popup-theme-future{ --fo-accent:90,170,255; --fo-header-bg:rgba(90,170,255,.12); }
+.future-observer-popup-theme-otherworld{ --fo-accent:180,110,255; --fo-header-bg:rgba(180,110,255,.12); }
+
 .future-observer-popup-header{
     display:flex;
     align-items:center;
     justify-content:space-between;
     padding:10px 12px;
     font-weight:bold;
-    background:rgba(255,255,255,.04);
-    border-bottom:1px solid rgba(255,255,255,.1);
+    background:var(--fo-header-bg);
+    border-bottom:1px solid rgba(var(--fo-accent),.35);
     cursor:move;
+    transition:background .2s ease;
 }
 .future-observer-popup-header-actions{
     display:flex;

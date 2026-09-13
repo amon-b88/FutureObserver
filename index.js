@@ -117,7 +117,9 @@ function buildFandomIdentityText(work) {
 评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
 1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
 3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
-这条"网名+括号真名"的格式规则，只在这个同人模式下使用。`;
+这条"网名+括号真名"的格式规则，只在这个同人模式下使用。
+
+另外，有一定概率（不是每次、也不是每个角色都会这样）——某位评论者会产生一种错觉：怀疑眼前这段剧情其实正发生在自己所在的那个世界/未来，而不只是在看别人的故事。这种错觉会让他这条评论的情绪明显更激烈、更慌张（震惊、追问"这不会是真的吧"、担心自己那边是不是也要出事），跟其他角色轻松吃瓜围观的语气形成反差。`;
 }
 
 function getSettings() {
@@ -197,9 +199,24 @@ function getRecentChat() {
     return result;
 }
 
+// 每次生成时随机抽一组"楼层数量/每条字数"的范围，让每次结果的热闹程度和详细程度都有变化，
+// 不再是固定死的"6~8条/20~80字"。
+function pickRandomLengthSpec() {
+    const countOptions = [
+        [7, 10], [8, 12], [10, 14], [9, 13], [11, 16],
+    ];
+    const lengthOptions = [
+        [40, 90], [60, 120], [80, 150], [50, 100], [100, 180],
+    ];
+    const [countMin, countMax] = countOptions[Math.floor(Math.random() * countOptions.length)];
+    const [lenMin, lenMax] = lengthOptions[Math.floor(Math.random() * lengthOptions.length)];
+    return { countMin, countMax, lenMin, lenMax };
+}
+
 function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
+    const { countMin, countMax, lenMin, lenMax } = pickRandomLengthSpec();
 
     let identityText;
     if (direction === 'otherworld' && settings.identity === 'fandom') {
@@ -225,7 +242,7 @@ ${identityText}
 3. 不得把评论中的推测当成事实，也不得凭空补充关键剧情。
 4. 可以出现误解、争论、玩梗、不同立场；评论者可以理解错，但不要让所有人都同一种看法。
 5. 评论重点放在这段剧情中真正发生的事件、人物行为和结果。
-6. 生成 6～8 条主楼评论，每条约20～80字。
+6. 生成 ${countMin}～${countMax} 条主楼评论，每条约${lenMin}～${lenMax}字。
 7. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则评论者之间身份要有明显差异。
 8. 要像真实的人讨论，不要写成论文。
 9. 不要出现"作为AI""提示词""主线"等元话语。
@@ -389,6 +406,7 @@ function syncControlsFromSettings() {
     $('.future-observer-identity-select').each(function () {
         renderIdentityOptions($(this), settings.timeDirection, settings.identity);
     });
+    applyPopupTheme();
 
     // 只有"异世界·同人模式"才显示作品名输入框（目前只放在悬浮球弹窗里）
     const showFandomInput = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
@@ -590,6 +608,18 @@ function applyPopupExpandState() {
         .text(settings.popupExpanded ? '⤡' : '⤢')
         .attr('title', settings.popupExpanded ? '缩小' : '放大');
     if (popup.is(':visible')) clampPopupIntoView(popup);
+}
+
+// 弹窗配色跟着"时间方向"变化：过去偏复古黄褐、未来偏科幻蓝、异世界偏紫、现在保持中性色
+function applyPopupTheme() {
+    const settings = getSettings();
+    const popup = $('#future-observer-popup');
+    if (!popup.length) return;
+    popup.removeClass(
+        'future-observer-popup-theme-past future-observer-popup-theme-present '
+        + 'future-observer-popup-theme-future future-observer-popup-theme-otherworld',
+    );
+    popup.addClass(`future-observer-popup-theme-${settings.timeDirection || 'future'}`);
 }
 
 function clampPopupIntoView(popup) {
