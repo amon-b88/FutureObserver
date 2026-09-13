@@ -22,11 +22,15 @@ const EXTENSION_NAME = (() => {
 const DEFAULT_SETTINGS = Object.freeze({
     messageCount: 10,
     maxChars: 14000,
-    timeDirection: 'future', // 'past' | 'present' | 'future'
+    timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
+    fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
     fabEnabled: true,
     fabX: null,
     fabY: null,
+    popupX: null,
+    popupY: null,
+    popupExpanded: false,
     customApi: Object.freeze({
         enabled: false,
         endpoint: '',
@@ -55,12 +59,17 @@ const IDENTITY_OPTIONS = {
         { value: 'selves', label: '当事人论坛（回忆/翻案）' },
         { value: 'mixed', label: '混合模式' },
     ],
+    otherworld: [
+        { value: 'title', label: '随机称号模式' },
+        { value: 'fandom', label: '同人模式' },
+    ],
 };
 
 const DIRECTION_OPTIONS = [
     { value: 'past', label: '过去' },
     { value: 'present', label: '现在' },
     { value: 'future', label: '未来' },
+    { value: 'otherworld', label: '异世界' },
 ];
 
 // 时间背景说明文字
@@ -68,9 +77,11 @@ const DIRECTION_TEXT = {
     past: '假设存在一个更早的时间点。评论者们正"提前"看到了后续会发生的这段剧情，但他们并不知道这是"未来"，只是单纯地看到了这些即将/已经发生的事，用当时的认知去理解和反应。',
     present: '假设这段剧情正在当下同一时间线上发生。评论者们与故事里的时代背景相同，是同一个"现在"，是正在经历/围观这一切时的实时反应，不是事后回忆。',
     future: '假设这段剧情早已成为很久以前的历史。评论者们站在遥远的未来回望这一切，带着事后诸葛亮式的评价、争论甚至翻案。',
+    otherworld: '假设有一群来自完全不同世界/宇宙的观测者，通过某种超越时空的神秘方式围观到了这段剧情。对他们而言，这段剧情本身与他们所在的世界毫无关联，只是一场"来自异世界的奇观"。',
 };
 
 // 评论者身份说明文字，按 [时间方向][身份] 两级查找
+// 注意：otherworld.fandom 不在这里静态写死，因为它要拼接用户填写的作品名，见 buildFandomIdentityText()
 const IDENTITY_TEXT = {
     past: {
         selves: '评论者是故事里角色们更早以前的自己（不必是"少年"——具体处于人生的哪个阶段，或者这个世界观、这个种族是否存在"年龄阶段"这种概念，请你自己根据故事本身的设定判断）。他们此刻并不知道后来会发生这段故事里的事，现在"看到"了，会做出反应、互相议论，甚至互相吐槽对方以后的所作所为。',
@@ -90,7 +101,24 @@ const IDENTITY_TEXT = {
         selves: '评论者是故事里出现过的真实角色们，但已经是许多年后的他们——是在回忆、反思，甚至试图翻案、否认、重新解释当年这段经历，语气里带着岁月沉淀后的复杂心态（可能懊悔，可能释怀，可能依然嘴硬）。',
         mixed: '评论者身份不固定，未来网友、历史学者、当事人后代、未来新闻记者、多年后的当事人本人等不同身份自然混杂出现，各自视角不同，具体每条评论是哪一类身份由你自由决定。',
     },
+    otherworld: {
+        title: '每个评论者都有一个自己现编、听上去很厉害/中二的称号或网名（风格类似"生命之神""邪神""世界守护者"，具体称号完全由你自由发挥、不要重复），然后按照这个称号自带的身份和调性去发言评价这段剧情——语气、立场要符合这个称号该有的"人设"，越有反差和喜感越好。这些称号是临时现编的，不对应任何真实存在的角色，不需要标注真实姓名。',
+        // fandom 由 buildFandomIdentityText() 动态生成
+    },
 };
+
+function buildFandomIdentityText(work) {
+    const trimmed = String(work || '').trim();
+    const scope = trimmed
+        ? `本次指定的作品/范围是"${trimmed}"，请从这个作品里选取角色作为评论者。`
+        : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色。';
+
+    return `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
+评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
+1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
+3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
+这条"网名+括号真名"的格式规则，只在这个同人模式下使用。`;
+}
 
 function getSettings() {
     const ctx = getContext();
@@ -172,8 +200,14 @@ function getRecentChat() {
 function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
-    const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
-    const identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
+
+    let identityText;
+    if (direction === 'otherworld' && settings.identity === 'fandom') {
+        identityText = buildFandomIdentityText(settings.fandomWork);
+    } else {
+        const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
+        identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
+    }
 
     return `你是"观察者论坛"。
 
@@ -257,7 +291,8 @@ function escapeHtml(str) {
 }
 
 // 把生成结果（纯文本，"1楼 - xxx：..." / "└ 2楼 - xxx 回复1楼：..." 这种格式）
-// 解析成一张张"楼层卡片"，而不是原样堆成一大段文字。
+// 解析成一张张"楼层卡片"。判断"是不是跟帖"用的是尽量宽松的规则——
+// 这终究是在猜AI输出的文字格式，不可能100%准确，猜不中的话就当普通主楼显示，不影响阅读。
 function renderResultInto($el, rawText) {
     const text = String(rawText || '').trim();
     if (!text) {
@@ -265,11 +300,16 @@ function renderResultInto($el, rawText) {
         return;
     }
 
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const rawLines = text.split(/\r?\n/).filter(l => l.trim());
     let html = '';
-    for (const line of lines) {
-        const isReply = /^[└╰\-]/.test(line) || /回复\s*\d+\s*楼/.test(line);
-        const cleaned = line.replace(/^[└╰\-]\s*/, '');
+    for (const rawLine of rawLines) {
+        const hadLeadingSpace = /^[ \t　]+/.test(rawLine);
+        const line = rawLine.trim();
+        const isReply = hadLeadingSpace
+            || /^[└╰↳→>＞»]+/.test(line)
+            || /回复\s*\d*\s*楼/.test(line)
+            || /^楼上/.test(line);
+        const cleaned = line.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
         const escaped = escapeHtml(cleaned);
         html += isReply
             ? `<div class="future-observer-reply">${escaped}</div>`
@@ -350,6 +390,10 @@ function syncControlsFromSettings() {
         renderIdentityOptions($(this), settings.timeDirection, settings.identity);
     });
 
+    // 只有"异世界·同人模式"才显示作品名输入框（目前只放在悬浮球弹窗里）
+    const showFandomInput = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
+    $('#future-observer-fandom-work').val(settings.fandomWork || '').toggle(showFandomInput);
+
     $('#future-observer-customapi-toggle').prop('checked', !!settings.customApi?.enabled);
     $('#future-observer-customapi-fields').toggle(!!settings.customApi?.enabled);
     $('#future-observer-customapi-endpoint').val(settings.customApi?.endpoint || '');
@@ -375,6 +419,12 @@ function bindSharedControls() {
         settings.identity = String($(this).val());
         saveSettings();
         syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverFandomWork').on('change.futureObserverFandomWork', '#future-observer-fandom-work', function () {
+        const settings = getSettings();
+        settings.fandomWork = String($(this).val()).trim();
+        saveSettings();
     });
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
@@ -446,28 +496,33 @@ async function loadSettingsUI() {
     bindSharedControls();
 }
 
-// ==================== 悬浮球 ====================
+// ==================== 悬浮球 + 弹窗 ====================
 
 function buildFloatingUI() {
     if ($('#future-observer-fab').length) return;
 
     const fab = $(
-        '<div id="future-observer-fab" class="future-observer-fab" title="观察者论坛（可拖动）">🔭</div>',
+        '<div id="future-observer-fab" class="future-observer-fab" title="观察者论坛（单击展开，拖动挪位置，双击复位面板）">🔭</div>',
     );
 
     const popup = $(`
         <div id="future-observer-popup" class="future-observer-popup" style="display:none;">
             <div class="future-observer-popup-header">
                 <span>🔭 观察者论坛</span>
-                <span id="future-observer-popup-close" class="future-observer-popup-close" title="关闭">✕</span>
+                <div class="future-observer-popup-header-actions">
+                    <span id="future-observer-popup-resize" class="future-observer-popup-icon-btn" title="放大">⤢</span>
+                    <span id="future-observer-popup-close" class="future-observer-popup-icon-btn" title="关闭">✕</span>
+                </div>
             </div>
             <div class="future-observer-popup-controls">
                 <select class="future-observer-direction-select">
                     <option value="past">过去</option>
                     <option value="present">现在</option>
                     <option value="future">未来</option>
+                    <option value="otherworld">异世界</option>
                 </select>
                 <select class="future-observer-identity-select"></select>
+                <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等" style="display:none;">
             </div>
             <button class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
             <div class="future-observer-result future-observer-popup-result">点击“生成评论区”查看。</div>
@@ -477,12 +532,21 @@ function buildFloatingUI() {
     $('body').append(fab).append(popup);
 
     applyFabPosition(fab);
-    makeDraggable(fab);
+    makeFabDraggable(fab);
+    makePopupDraggable(popup);
     applyFabVisibility();
+    applyPopupExpandState();
     syncControlsFromSettings();
 
     $(document).off('click.futureObserverPopupClose').on('click.futureObserverPopupClose', '#future-observer-popup-close', () => {
         popup.hide();
+    });
+
+    $(document).off('click.futureObserverPopupResize').on('click.futureObserverPopupResize', '#future-observer-popup-resize', () => {
+        const settings = getSettings();
+        settings.popupExpanded = !settings.popupExpanded;
+        saveSettings();
+        applyPopupExpandState();
     });
 
     // 点击悬浮球/弹窗以外的地方，自动收起弹窗
@@ -494,7 +558,7 @@ function buildFloatingUI() {
         });
 
     $(window).off('resize.futureObserver').on('resize.futureObserver', () => {
-        if (popup.is(':visible')) positionPopupNearFab();
+        if (popup.is(':visible')) clampPopupIntoView(popup);
     });
 }
 
@@ -515,6 +579,27 @@ function applyFabPosition(fab) {
     if (typeof settings.fabX === 'number' && typeof settings.fabY === 'number') {
         fab.css({ left: settings.fabX + 'px', top: settings.fabY + 'px', right: 'auto', bottom: 'auto' });
     }
+}
+
+function applyPopupExpandState() {
+    const settings = getSettings();
+    const popup = $('#future-observer-popup');
+    if (!popup.length) return;
+    popup.toggleClass('future-observer-popup-expanded', !!settings.popupExpanded);
+    $('#future-observer-popup-resize')
+        .text(settings.popupExpanded ? '⤡' : '⤢')
+        .attr('title', settings.popupExpanded ? '缩小' : '放大');
+    if (popup.is(':visible')) clampPopupIntoView(popup);
+}
+
+function clampPopupIntoView(popup) {
+    if (!popup.length || !popup.is(':visible')) return;
+    const rect = popup[0].getBoundingClientRect();
+    const maxLeft = Math.max(0, window.innerWidth - popup.outerWidth());
+    const maxTop = Math.max(0, window.innerHeight - popup.outerHeight());
+    const left = Math.max(0, Math.min(rect.left, maxLeft));
+    const top = Math.max(0, Math.min(rect.top, maxTop));
+    popup.css({ left: left + 'px', top: top + 'px' });
 }
 
 function positionPopupNearFab() {
@@ -550,14 +635,37 @@ function togglePopup() {
         return;
     }
     syncControlsFromSettings();
-    positionPopupNearFab();
+    const settings = getSettings();
+    // 先显示再定位，这样才能测量到真实尺寸（display:none 的元素测量不到宽高）
     popup.show();
+    if (typeof settings.popupX === 'number' && typeof settings.popupY === 'number') {
+        popup.css({ left: settings.popupX + 'px', top: settings.popupY + 'px' });
+        clampPopupIntoView(popup);
+    } else {
+        positionPopupNearFab();
+    }
 }
 
-function makeDraggable(fab) {
+function resetPopupPositionAndSize() {
+    const settings = getSettings();
+    settings.popupX = null;
+    settings.popupY = null;
+    settings.popupExpanded = false;
+    saveSettings();
+
+    const popup = $('#future-observer-popup');
+    popup.removeClass('future-observer-popup-expanded');
+    $('#future-observer-popup-resize').text('⤢').attr('title', '放大');
+    popup.show();
+    positionPopupNearFab();
+    toastr.info('面板位置和大小已重置。', '观察者论坛');
+}
+
+function makeFabDraggable(fab) {
     let dragging = false;
     let moved = false;
     let startX = 0, startY = 0, origX = 0, origY = 0;
+    let lastClickTime = 0;
 
     function pointFromEvent(e) {
         return e.touches && e.touches.length ? e.touches[0] : e;
@@ -592,8 +700,6 @@ function makeDraggable(fab) {
 
         fab.css({ left: newX + 'px', top: newY + 'px', right: 'auto', bottom: 'auto' });
 
-        if ($('#future-observer-popup').is(':visible')) positionPopupNearFab();
-
         if (e.cancelable) e.preventDefault();
     }
 
@@ -606,12 +712,79 @@ function makeDraggable(fab) {
             settings.fabX = rect.left;
             settings.fabY = rect.top;
             saveSettings();
+            return;
+        }
+
+        // 单击 vs 双击判断：350ms内的第二次点击视为双击（复位），否则视为单击（展开/收起弹窗）
+        const now = Date.now();
+        if (now - lastClickTime < 350) {
+            lastClickTime = 0;
+            resetPopupPositionAndSize();
         } else {
+            lastClickTime = now;
             togglePopup();
         }
     }
 
     fab.on('mousedown touchstart', onDown);
+}
+
+function makePopupDraggable(popup) {
+    const header = popup.find('.future-observer-popup-header');
+    let dragging = false;
+    let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+    function pointFromEvent(e) {
+        return e.touches && e.touches.length ? e.touches[0] : e;
+    }
+
+    function onDown(e) {
+        // 点在关闭/放大按钮上时不触发拖动，让按钮自己的click正常工作
+        if ($(e.target).closest('.future-observer-popup-icon-btn').length) return;
+
+        dragging = true;
+        const p = pointFromEvent(e.originalEvent || e);
+        startX = p.clientX;
+        startY = p.clientY;
+        const rect = popup[0].getBoundingClientRect();
+        origLeft = rect.left;
+        origTop = rect.top;
+        $(document).on('mousemove.futureObserverPopupDrag touchmove.futureObserverPopupDrag', onMove);
+        $(document).on('mouseup.futureObserverPopupDrag touchend.futureObserverPopupDrag', onUp);
+        if (e.cancelable) e.preventDefault();
+    }
+
+    function onMove(e) {
+        if (!dragging) return;
+        const p = pointFromEvent(e.originalEvent || e);
+        const dx = p.clientX - startX;
+        const dy = p.clientY - startY;
+
+        let newLeft = origLeft + dx;
+        let newTop = origTop + dy;
+        const maxLeft = Math.max(0, window.innerWidth - popup.outerWidth());
+        const maxTop = Math.max(0, window.innerHeight - popup.outerHeight());
+        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+        newTop = Math.max(0, Math.min(newTop, maxTop));
+
+        popup.css({ left: newLeft + 'px', top: newTop + 'px' });
+        if (e.cancelable) e.preventDefault();
+    }
+
+    function onUp() {
+        if (!dragging) return;
+        dragging = false;
+        $(document).off('.futureObserverPopupDrag');
+
+        const rect = popup[0].getBoundingClientRect();
+        const settings = getSettings();
+        settings.popupX = rect.left;
+        settings.popupY = rect.top;
+        saveSettings();
+    }
+
+    header.css('cursor', 'move');
+    header.on('mousedown touchstart', onDown);
 }
 
 jQuery(async () => {

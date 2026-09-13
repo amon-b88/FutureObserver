@@ -100,23 +100,31 @@
     font-weight:bold;
     background:rgba(255,255,255,.04);
     border-bottom:1px solid rgba(255,255,255,.1);
+    cursor:move;
 }
-.future-observer-popup-close{
+.future-observer-popup-header-actions{
+    display:flex;
+    gap:4px;
+    align-items:center;
+    cursor:default; /* 头部整体可拖动，但按钮区域自己是普通指针，不继承 move 光标 */
+}
+.future-observer-popup-icon-btn{
     cursor:pointer;
     opacity:.65;
-    font-size:1.1em;
+    font-size:1.05em;
     line-height:1;
-    padding:2px 4px;
+    padding:2px 6px;
     border-radius:4px;
 }
-.future-observer-popup-close:hover{opacity:1;background:rgba(255,255,255,.08)}
+.future-observer-popup-icon-btn:hover{opacity:1;background:rgba(255,255,255,.08)}
 .future-observer-popup-controls{
     display:flex;
     flex-direction:column;
     gap:8px;
     padding:10px 12px 6px;
 }
-.future-observer-popup-controls select{
+.future-observer-popup-controls select,
+.future-observer-popup-controls input[type="text"]{
     width:100%;
     max-width:none;
 }
@@ -128,6 +136,7 @@
     margin:4px 12px 10px;
     white-space:nowrap;
     text-align:center;
+    flex-shrink:0;
 }
 .future-observer-popup-result{
     width:calc(100% - 24px);
@@ -135,4 +144,15 @@
     overflow-y:auto;
     min-height:90px;
     max-height:38vh;
+}
+
+/* 放大模式：面板变成一个更大的固定尺寸窗口，结果区占满剩余空间 */
+.future-observer-popup.future-observer-popup-expanded{
+    width:min(480px, calc(100vw - 20px));
+    height:min(85vh, 760px);
+    max-height:85vh;
+}
+.future-observer-popup.future-observer-popup-expanded .future-observer-popup-result{
+    flex:1 1 auto;
+    max-height:none;
 }
