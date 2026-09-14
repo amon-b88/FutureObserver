@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     identity: 'forum',
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
     fabEnabled: true,
+    worldInfoEnabled: true,
     fabX: null,
     fabY: null,
     popupX: null,
@@ -107,6 +108,22 @@ const IDENTITY_TEXT = {
     },
 };
 
+// "误以为剧情发生在自己世界"这个彩蛋，由代码真随机决定要不要触发（不再靠AI自己掌握概率），
+// 命中率固定为 8%。触发时从几种不同的"由头"里随机挑一种塞进prompt，避免每次都是同一套模板文字。
+const WORLD_BLEED_HINTS = [
+    '某位评论者盯着剧情里出现的某个具体物品、地名或称呼，越看越眼熟，怀疑这其实就是他自己所在的世界。',
+    '某位评论者从某一句台词的用词习惯或语气里，联想到自己那边最近发生的事，情绪突然绷不住。',
+    '某位评论者说不清具体是哪个细节，但一种强烈的直觉告诉他——这不是在看别人的故事，而是在预告他自己的未来。',
+    '某位评论者认出了剧情里某个角色的某个特征，跟自己认识的某个人对上了号，瞬间慌了神。',
+    '某位评论者算了算剧情里提到的某个时间点，越算越觉得后背发凉，好像跟自己那边的某个日子对上了。',
+];
+
+function maybeBuildWorldBleedRule() {
+    if (Math.random() >= 0.08) return '';
+    const hint = WORLD_BLEED_HINTS[Math.floor(Math.random() * WORLD_BLEED_HINTS.length)];
+    return `\n\n另外这次触发了一条低概率隐藏规则：请安排恰好一位评论者（不要多位）产生"这段剧情其实发生在自己所在的那个世界/未来"的错觉，具体的由头是——${hint} 这会让他这条评论明显比其他人更激烈、更慌张（震惊、反复追问、担心自己那边是不是也要出事），跟其他角色轻松围观吃瓜的语气形成鲜明反差。`;
+}
+
 function buildFandomIdentityText(work) {
     const trimmed = String(work || '').trim();
     const scope = trimmed
@@ -117,9 +134,7 @@ function buildFandomIdentityText(work) {
 评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
 1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
 3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
-这条"网名+括号真名"的格式规则，只在这个同人模式下使用。
-
-另外有一条低概率的隐藏彩蛋规则：大约三次生成里，只有一次会触发；其余三分之二的情况完全不要写这类内容，所有评论者都正常围观即可，不要每次都安排。一旦触发，最多只安排一位评论者（不要多位）产生这种错觉：怀疑眼前这段剧情其实正发生在自己所在的那个世界/未来，而不只是在看别人的故事。这种错觉会让他这条评论的情绪明显更激烈、更慌张（震惊、追问"这不会是真的吧"、担心自己那边是不是也要出事），跟其他角色轻松吃瓜围观的语气形成反差。`;
+这条"网名+括号真名"的格式规则，只在这个同人模式下使用。${maybeBuildWorldBleedRule()}`;
 }
 
 function getSettings() {
@@ -213,7 +228,25 @@ function pickRandomLengthSpec() {
     return { countMin, countMax, lenMin, lenMax };
 }
 
-function buildPrompt(story) {
+// 读取当前聊天关键词命中的世界书内容（不是整本世界书，是酒馆按关键词触发出来的那部分）。
+// 失败/不支持的情况一律静默跳过，不影响正常生成。
+async function getWorldInfoText() {
+    try {
+        const ctx = getContext();
+        if (typeof ctx.getWorldInfoPrompt !== 'function') return '';
+        const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+        const result = await ctx.getWorldInfoPrompt(chat, 2048, false);
+        if (!result) return '';
+        const parts = [result.worldInfoBefore, result.worldInfoString, result.worldInfoAfter]
+            .filter(part => typeof part === 'string' && part.trim());
+        return parts.join('\n').trim();
+    } catch (error) {
+        console.warn('[观察者论坛] 读取世界书失败，本次生成将不携带世界书内容：', error);
+        return '';
+    }
+}
+
+async function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
     const { countMin, countMax, lenMin, lenMax } = pickRandomLengthSpec();
@@ -225,6 +258,11 @@ function buildPrompt(story) {
         const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
         identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
     }
+
+    const worldInfoText = settings.worldInfoEnabled !== false ? await getWorldInfoText() : '';
+    const worldInfoBlock = worldInfoText
+        ? `\n【世界设定参考】（背景知识，不是新发生的剧情，仅用于帮助理解剧情里的名词和背景）\n${worldInfoText}\n`
+        : '';
 
     return `你是"观察者论坛"。
 
@@ -255,7 +293,7 @@ ${identityText}
 1楼 - 某某：……
     └ 2楼 - 某某 回复1楼：……
 3楼 - 某某：……
-
+${worldInfoBlock}
 【剧情片段】
 ${story}
 
@@ -352,7 +390,7 @@ async function generateObservation() {
 
     try {
         const settings = getSettings();
-        const prompt = buildPrompt(story);
+        const prompt = await buildPrompt(story);
         let result;
 
         if (settings.customApi?.enabled) {
@@ -401,6 +439,7 @@ function syncControlsFromSettings() {
     $('#future-observer-count').val(settings.messageCount);
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
+    $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
 
     $('.future-observer-direction-select').val(settings.timeDirection);
     $('.future-observer-identity-select').each(function () {
@@ -466,6 +505,12 @@ function bindSharedControls() {
         settings.fabEnabled = $(this).is(':checked');
         saveSettings();
         applyFabVisibility();
+    });
+
+    $('#future-observer-worldinfo-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.worldInfoEnabled = $(this).is(':checked');
+        saveSettings();
     });
 
     $('#future-observer-customapi-toggle').off('change').on('change', function () {
