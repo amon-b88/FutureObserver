@@ -690,13 +690,16 @@ function bindSharedControls() {
         saveSettings();
     });
 
-    $('#future-observer-popup-weibo-toggle').off('change').on('change', function () {
+    // 这两个控件是在悬浮球弹窗里，弹窗创建的时机比这里晚，
+    // 所以必须用事件委托（绑定在document上，实际点击时才去找目标元素），
+    // 不能像上面那样直接对着当前还不存在的元素 $('#id').on(...)，否则绑定会静默失效。
+    $(document).off('change.futureObserverWeiboToggle').on('change.futureObserverWeiboToggle', '#future-observer-popup-weibo-toggle', function () {
         const settings = getSettings();
         settings.weiboMode = $(this).is(':checked');
         saveSettings();
     });
 
-    $('#future-observer-popup-memory-toggle').off('change').on('change', function () {
+    $(document).off('change.futureObserverMemoryToggle').on('change.futureObserverMemoryToggle', '#future-observer-popup-memory-toggle', function () {
         const settings = getSettings();
         settings.memoryEnabled = $(this).is(':checked');
         saveSettings();
