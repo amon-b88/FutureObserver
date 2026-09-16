@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
+    fandomSameWorld: false, // 剧情本身就发生在这部作品的世界里（穿越/同人卡），而不是外部围观
     weiboMode: false, // 微博体：先发一条主贴，评论都围绕主贴的具体观点展开
     memoryEnabled: false, // 记忆开关：这次生成会参考"同一类评论者"上一次讨论的内容
     fabEnabled: true,
@@ -127,17 +128,29 @@ function maybeBuildWorldBleedRule() {
     return `\n\n另外这次触发了一条低概率隐藏规则：请安排恰好一位评论者（不要多位）产生"这段剧情其实发生在自己所在的那个世界/未来"的错觉，具体的由头是——${hint} 这会让他这条评论明显比其他人更激烈、更慌张（震惊、反复追问、担心自己那边是不是也要出事），跟其他角色轻松围观吃瓜的语气形成鲜明反差。`;
 }
 
-function buildFandomIdentityText(work) {
+function buildFandomIdentityText(work, isSameWorld) {
     const trimmed = String(work || '').trim();
     const scope = trimmed
         ? `本次指定的作品/范围是"${trimmed}"，请只从这个作品里选取角色作为评论者，不要混入其他作品的角色。而且要尊重这些角色在原作里真实的人物关系（比如谁是谁的师父、谁跟谁是对头、谁跟谁是队友），评论/吵架/附和的时候，语气和立场要符合这层原作关系，不要把他们当成互不相干的陌生网友。`
         : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色，这种情况下角色之间不需要有原作关系，正常当作互不相干的路人网友处理即可。';
 
-    return `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
+    const base = `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
 评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
 1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
 3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
-这条"网名+括号真名"的格式规则，只在这个同人模式下使用。${maybeBuildWorldBleedRule()}`;
+这条"网名+括号真名"的格式规则，只在这个同人模式下使用。`;
+
+    if (isSameWorld) {
+        return `${base}
+
+【特别设定：这不是"围观别的世界"，这就是评论者自己的世界】
+这次的剧情本身就发生在评论者所在的这个作品世界观里（比如主角穿越/穿书到了这个世界），评论者不是在看一个跟自己无关的外部故事，而是这个世界里真实存在的当地人，剧情里的一切就是发生在他们身边的真事，不是"别人的故事"。
+- 不要把这个世界本来就该有的常识/设定当成新奇陌生的东西表示惊讶——比如在鬼灭之刃的世界观里，"鬼"的存在对鬼杀队来说是天经地义的常识，绝不会有人对"竟然有鬼"这种事感到震惊；同理，其他作品里各自的常识设定也一样，不要凭空制造这种不该有的新鲜感。
+- 评论者要结合自己在原作里知道的信息（认识的人、去过的地方、经历过的事）来对剧情里具体发生的事件做反应，就像在讨论"最近在我们自己这边发生的事"，而不是像看别人的故事那样置身事外。
+- 如果剧情里的主角跟原作角色发生过具体的互动（帮助、伤害、杀死、结识等），评论者要表现出这件事对"他们自己的世界"是真实、有影响的，该震惊震惊、该愤怒愤怒，不能表现得事不关己。`;
+    }
+
+    return `${base}${maybeBuildWorldBleedRule()}`;
 }
 
 // 记忆的分类粒度：时间方向 + 身份 +（同人模式下）随机/具体作品名。
@@ -356,7 +369,7 @@ async function buildPrompt(story) {
 
     let identityText;
     if (direction === 'otherworld' && settings.identity === 'fandom') {
-        identityText = buildFandomIdentityText(settings.fandomWork);
+        identityText = buildFandomIdentityText(settings.fandomWork, settings.fandomSameWorld);
     } else {
         const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
         identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
@@ -629,9 +642,10 @@ function syncControlsFromSettings() {
     applyPopupTheme();
     refreshHistoryNav();
 
-    // 只有"异世界·同人模式"才显示作品名输入框（目前只放在悬浮球弹窗里）
+    // 只有"异世界·同人模式"才显示作品名输入框和"同一个世界"勾选框（目前只放在悬浮球弹窗里）
     const showFandomInput = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
     $('#future-observer-fandom-work').val(settings.fandomWork || '').toggle(showFandomInput);
+    $('#future-observer-fandom-sameworld').prop('checked', !!settings.fandomSameWorld).closest('label').toggle(showFandomInput);
 
     $('#future-observer-customapi-toggle').prop('checked', !!settings.customApi?.enabled);
     $('#future-observer-customapi-fields').toggle(!!settings.customApi?.enabled);
@@ -663,6 +677,12 @@ function bindSharedControls() {
     $(document).off('change.futureObserverFandomWork').on('change.futureObserverFandomWork', '#future-observer-fandom-work', function () {
         const settings = getSettings();
         settings.fandomWork = String($(this).val()).trim();
+        saveSettings();
+    });
+
+    $(document).off('change.futureObserverFandomSameWorld').on('change.futureObserverFandomSameWorld', '#future-observer-fandom-sameworld', function () {
+        const settings = getSettings();
+        settings.fandomSameWorld = $(this).is(':checked');
         saveSettings();
     });
 
@@ -801,6 +821,7 @@ function buildFloatingUI() {
                 </select>
                 <select class="future-observer-identity-select"></select>
                 <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等" style="display:none;">
+                <label class="future-observer-popup-checkbox" style="display:none;"><input type="checkbox" id="future-observer-fandom-sameworld"> 剧情本身就发生在这部作品的世界里（穿越/同人卡）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-weibo-toggle"> 微博体（先发主贴，评论围绕主贴讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
             </div>
