@@ -9,8 +9,11 @@
                 把当前剧情放到过去/现在/未来任意一个时间方向去观察，生成与主线分离的评论、吐槽与争论。
             </div>
             <div class="future-observer-row">
-                <label>读取最近 <input id="future-observer-count" type="number" min="1" max="50"> 楼</label>
+                <label>读取最近 <input id="future-observer-count" type="number" min="1" max="100"> 楼</label>
                 <label>最多读取 <input id="future-observer-maxchars" type="number" min="2000" max="30000" step="1000"> 字符</label>
+            </div>
+            <div class="future-observer-row">
+                <label><input type="checkbox" id="future-observer-aionly-toggle"> 只读取AI角色的发言（不含我自己发送的消息）</label>
             </div>
             <div class="future-observer-row">
                 <label>时间方向</label>

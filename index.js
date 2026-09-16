@@ -21,6 +21,7 @@ const EXTENSION_NAME = (() => {
 
 const DEFAULT_SETTINGS = Object.freeze({
     messageCount: 10,
+    aiOnly: false,
     maxChars: 14000,
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
@@ -274,20 +275,27 @@ function getRecentChat() {
     const ctx = getContext();
     const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
     const settings = getSettings();
-    const count = Math.max(1, Math.min(50, Number(settings.messageCount) || 10));
-    const start = Math.max(0, chat.length - count);
+    const count = Math.max(1, Math.min(100, Number(settings.messageCount) || 10));
+    const aiOnly = !!settings.aiOnly;
     const lines = [];
+    let collected = 0;
 
-    for (let i = start; i < chat.length; i++) {
+    // 从最新的消息往前扫，凑够 count 条符合条件的消息为止；
+    // 开了"只读AI"之后，这里的 count 就是精确指"最近N条AI发言"，不再是"N条里混着用户消息"。
+    for (let i = chat.length - 1; i >= 0 && collected < count; i--) {
         const m = chat[i];
         if (!m || m.is_system) continue;
+        if (aiOnly && m.is_user) continue;
 
         const name = m.is_user
             ? (ctx.name1 || '用户')
             : (m.name || ctx.name2 || '角色');
 
         const text = String(m.mes ?? '').trim();
-        if (text) lines.push(`【${name}】\n${text}`);
+        if (!text) continue;
+
+        lines.unshift(`【${name}】\n${text}`); // 从后往前收集的，最后要倒回正常的时间顺序
+        collected++;
     }
 
     let result = lines.join('\n\n');
@@ -373,7 +381,15 @@ async function buildPrompt(story) {
         const scopeKey = getMemoryScopeKey(settings);
         const lastMemory = getMemoryEntry(scopeKey);
         if (lastMemory) {
-            memoryBlock = `\n【上一次的观察记录】（同一类评论者上次讨论的内容，可以参考、呼应，甚至继续吵/和解，也可以完全翻篇开新话题，不强制延续，你自己判断怎么处理最自然）\n${lastMemory}\n`;
+            memoryBlock = `\n【上一轮讨论回顾——这是已经过去的旧内容，不是这次要写的东西】
+${lastMemory}
+
+【关于这次要怎么处理上面这段回顾，硬性要求】
+- 这次是全新的一轮，时间点在上面那轮"之后"，不是同一轮的另一个版本。
+- 严禁把上面这段内容换几个词、调整下语序后再发一遍；严禁让新一轮的整体论点、结构跟上面高度重合。
+- 必须让人看出"事情往后推进了"：可以是分歧被吵得更激烈、可以是有人退让促成和解、可以是出现了新的具体角度把话题带偏、也可以是干脆没人再提这茬、聊起了全新的话题——具体选哪种你自己判断，但必须明确体现出"这是下一轮"，而不是原地踏步。
+- 上面这段回顾只是给你了解"之前发生过什么"，这次要生成的评论内容本身，不需要再重复复述这些旧观点。
+`;
         }
     }
 
@@ -599,6 +615,7 @@ function syncControlsFromSettings() {
     const settings = getSettings();
 
     $('#future-observer-count').val(settings.messageCount);
+    $('#future-observer-aionly-toggle').prop('checked', !!settings.aiOnly);
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
@@ -665,8 +682,14 @@ function bindSharedControls() {
 
     $('#future-observer-count').off('change').on('change', function () {
         const settings = getSettings();
-        settings.messageCount = Math.max(1, Math.min(50, Number($(this).val()) || 10));
+        settings.messageCount = Math.max(1, Math.min(100, Number($(this).val()) || 10));
         $(this).val(settings.messageCount);
+        saveSettings();
+    });
+
+    $('#future-observer-aionly-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.aiOnly = $(this).is(':checked');
         saveSettings();
     });
 
