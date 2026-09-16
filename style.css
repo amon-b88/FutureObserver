@@ -9,6 +9,31 @@
 .future-observer-action{margin:10px 0}
 .future-observer-result-details{margin-top:8px}
 .future-observer-result-details summary{cursor:pointer;user-select:none}
+
+/* 历史记录导航条：上一条/第几条/下一条 */
+.future-observer-history-nav{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    margin-top:8px;
+}
+.future-observer-history-nav button{
+    padding:2px 10px;
+    font-size:.85em;
+    line-height:1.6;
+}
+.future-observer-history-nav button:disabled{
+    opacity:.35;
+    cursor:not-allowed;
+}
+.future-observer-history-index{
+    font-size:.85em;
+    opacity:.75;
+    min-width:64px;
+    text-align:center;
+}
+
 .future-observer-result{
     white-space:pre-wrap;
     line-height:1.6;
@@ -36,6 +61,17 @@
     font-size:.93em;
     line-height:1.5;
     opacity:.92;
+}
+/* 微博体的"主贴"，比普通楼层更醒目，视觉上一眼看出这是帖子标题 */
+.future-observer-mainpost{
+    padding:10px 12px;
+    margin:2px 0 10px;
+    border-radius:10px;
+    background:rgba(var(--fo-accent,255,200,120),.14);
+    border:1px solid rgba(var(--fo-accent,255,200,120),.4);
+    font-weight:bold;
+    font-size:1.02em;
+    line-height:1.6;
 }
 
 .future-observer-customapi-fields{
@@ -137,6 +173,15 @@
 .future-observer-popup-controls input[type="text"]{
     width:100%;
     max-width:none;
+}
+.future-observer-popup-checkbox{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    font-size:.92em;
+    line-height:1.4;
+    opacity:.9;
+    cursor:pointer;
 }
 /* 显式给按钮和结果区算出确切宽度，不依赖 flex 的 stretch 行为
    （在部分酒馆主题下 stretch 不生效，会导致按钮/结果区收缩成

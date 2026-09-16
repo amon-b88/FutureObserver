@@ -25,6 +25,8 @@ const DEFAULT_SETTINGS = Object.freeze({
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
+    weiboMode: false, // 微博体：先发一条主贴，评论都围绕主贴的具体观点展开
+    memoryEnabled: false, // 记忆开关：这次生成会参考"同一类评论者"上一次讨论的内容
     fabEnabled: true,
     worldInfoEnabled: true,
     fabX: null,
@@ -127,14 +129,98 @@ function maybeBuildWorldBleedRule() {
 function buildFandomIdentityText(work) {
     const trimmed = String(work || '').trim();
     const scope = trimmed
-        ? `本次指定的作品/范围是"${trimmed}"，请从这个作品里选取角色作为评论者。`
-        : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色。';
+        ? `本次指定的作品/范围是"${trimmed}"，请只从这个作品里选取角色作为评论者，不要混入其他作品的角色。而且要尊重这些角色在原作里真实的人物关系（比如谁是谁的师父、谁跟谁是对头、谁跟谁是队友），评论/吵架/附和的时候，语气和立场要符合这层原作关系，不要把他们当成互不相干的陌生网友。`
+        : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色，这种情况下角色之间不需要有原作关系，正常当作互不相干的路人网友处理即可。';
 
     return `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
 评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
 1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
 3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
 这条"网名+括号真名"的格式规则，只在这个同人模式下使用。${maybeBuildWorldBleedRule()}`;
+}
+
+// 记忆的分类粒度：时间方向 + 身份 +（同人模式下）随机/具体作品名。
+// 同人·指定作品 按作品名分别独立记忆；同人·随机 不按作品细分，统一记一条。
+function getMemoryScopeKey(settings) {
+    const direction = settings.timeDirection;
+    const identity = settings.identity;
+    if (direction === 'otherworld' && identity === 'fandom') {
+        const work = String(settings.fandomWork || '').trim();
+        return work ? `otherworld:fandom:${work}` : 'otherworld:fandom:random';
+    }
+    return `${direction}:${identity}`;
+}
+
+// 记忆存取：绑定在"当前聊天"本身（chatMetadata），不是全局设置，切换聊天/角色会自动换成对应那条。
+function getMemoryStore() {
+    const ctx = getContext();
+    ctx.chatMetadata ??= {};
+    if (!ctx.chatMetadata.future_observer_memory) {
+        ctx.chatMetadata.future_observer_memory = {};
+    }
+    return ctx.chatMetadata.future_observer_memory;
+}
+
+function getMemoryEntry(scopeKey) {
+    try {
+        const store = getMemoryStore();
+        return store[scopeKey]?.text || '';
+    } catch (error) {
+        console.warn('[观察者论坛] 读取记忆失败：', error);
+        return '';
+    }
+}
+
+async function saveMemoryEntry(scopeKey, text) {
+    try {
+        const ctx = getContext();
+        const store = getMemoryStore();
+        store[scopeKey] = { text: String(text || '').slice(0, 1500), savedAt: Date.now() };
+        if (typeof ctx.saveMetadata === 'function') {
+            await ctx.saveMetadata();
+        }
+    } catch (error) {
+        console.warn('[观察者论坛] 保存记忆失败：', error);
+    }
+}
+
+// 历史记录浏览：跟"记忆"是两回事——记忆是喂给AI看的、只留一条精简版；
+// 这个是给你自己翻看的、保留最近几条完整原文，跟"记忆开关"是否打开无关，一直都会记录。
+const HISTORY_MAX_ENTRIES = 5;
+
+function getHistoryStore() {
+    const ctx = getContext();
+    ctx.chatMetadata ??= {};
+    if (!ctx.chatMetadata.future_observer_history) {
+        ctx.chatMetadata.future_observer_history = {};
+    }
+    return ctx.chatMetadata.future_observer_history;
+}
+
+function getHistoryList(scopeKey) {
+    try {
+        const store = getHistoryStore();
+        return Array.isArray(store[scopeKey]) ? store[scopeKey] : [];
+    } catch (error) {
+        console.warn('[观察者论坛] 读取历史记录失败：', error);
+        return [];
+    }
+}
+
+async function pushHistoryEntry(scopeKey, text) {
+    try {
+        const ctx = getContext();
+        const store = getHistoryStore();
+        const list = Array.isArray(store[scopeKey]) ? store[scopeKey] : [];
+        list.push({ text: String(text || ''), savedAt: Date.now() });
+        while (list.length > HISTORY_MAX_ENTRIES) list.shift();
+        store[scopeKey] = list;
+        if (typeof ctx.saveMetadata === 'function') {
+            await ctx.saveMetadata();
+        }
+    } catch (error) {
+        console.warn('[观察者论坛] 保存历史记录失败：', error);
+    }
 }
 
 function getSettings() {
@@ -233,13 +319,22 @@ function pickRandomLengthSpec() {
 async function getWorldInfoText() {
     try {
         const ctx = getContext();
-        if (typeof ctx.getWorldInfoPrompt !== 'function') return '';
+        if (typeof ctx.getWorldInfoPrompt !== 'function') {
+            console.log('[观察者论坛][世界书诊断] 当前酒馆版本没有 getWorldInfoPrompt 这个接口，跳过世界书读取。');
+            return '';
+        }
         const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
         const result = await ctx.getWorldInfoPrompt(chat, 2048, false);
-        if (!result) return '';
+        console.log('[观察者论坛][世界书诊断] getWorldInfoPrompt 原始返回：', result);
+        if (!result) {
+            console.log('[观察者论坛][世界书诊断] 返回值为空，本次没有世界书内容。');
+            return '';
+        }
         const parts = [result.worldInfoBefore, result.worldInfoString, result.worldInfoAfter]
             .filter(part => typeof part === 'string' && part.trim());
-        return parts.join('\n').trim();
+        const finalText = parts.join('\n').trim();
+        console.log('[观察者论坛][世界书诊断] 提取出的文字长度：', finalText.length, finalText ? '（有内容）' : '（是空的）');
+        return finalText;
     } catch (error) {
         console.warn('[观察者论坛] 读取世界书失败，本次生成将不携带世界书内容：', error);
         return '';
@@ -263,6 +358,24 @@ async function buildPrompt(story) {
     const worldInfoBlock = worldInfoText
         ? `\n【世界设定参考】（背景知识，不是新发生的剧情，仅用于帮助理解剧情里的名词和背景）\n${worldInfoText}\n`
         : '';
+
+    const weiboBlock = settings.weiboMode ? `
+
+【微博体规则】
+- 先由评论者里的某一位发一条抓眼球的"主贴"，标题党风格（比如"讨论……""震惊……""只有我觉得……"这种开头），用一两句话说出一个具体、有态度的观点或角度，而不是泛泛复述剧情。
+- 主贴单独一行，用下面这个固定格式标出（方便程序识别，务必照抄这个格式，不要变化）：
+【主贴】某某：只有我觉得他这波操作离谱吗？
+- 之后所有的主楼评论和跟帖，都必须针对这条主贴提出的具体观点来回应（赞同、反驳、追问、玩梗），不要各自评论剧情里不相关的别的地方。
+- 楼层编号从主贴之后的第一条评论开始算1楼，主贴本身不算入楼层编号。` : '';
+
+    let memoryBlock = '';
+    if (settings.memoryEnabled) {
+        const scopeKey = getMemoryScopeKey(settings);
+        const lastMemory = getMemoryEntry(scopeKey);
+        if (lastMemory) {
+            memoryBlock = `\n【上一次的观察记录】（同一类评论者上次讨论的内容，可以参考、呼应，甚至继续吵/和解，也可以完全翻篇开新话题，不强制延续，你自己判断怎么处理最自然）\n${lastMemory}\n`;
+        }
+    }
 
     return `你是"观察者论坛"。
 
@@ -292,8 +405,8 @@ ${identityText}
 - 用类似下面的格式区分主楼和跟帖（楼层编号连续往下排，跟帖用缩进和"回复X楼"标出）：
 1楼 - 某某：……
     └ 2楼 - 某某 回复1楼：……
-3楼 - 某某：……
-${worldInfoBlock}
+3楼 - 某某：……${weiboBlock}
+${worldInfoBlock}${memoryBlock}
 【剧情片段】
 ${story}
 
@@ -360,6 +473,15 @@ function renderResultInto($el, rawText) {
     for (const rawLine of rawLines) {
         const hadLeadingSpace = /^[ \t　]+/.test(rawLine);
         const line = rawLine.trim();
+
+        // 微博体的"主贴"单独识别，渲染成醒目的帖子头条样式
+        const isMainPost = /^【?主贴】?/.test(line);
+        if (isMainPost) {
+            const cleanedPost = line.replace(/^【?主贴】?\s*[:：]?\s*/, '');
+            html += `<div class="future-observer-mainpost">${escapeHtml(cleanedPost)}</div>`;
+            continue;
+        }
+
         const isReply = hadLeadingSpace
             || /^[└╰↳→>＞»]+/.test(line)
             || /回复\s*\d*\s*楼/.test(line)
@@ -372,6 +494,37 @@ function renderResultInto($el, rawText) {
     }
 
     $el.html(html || escapeHtml(text));
+}
+
+// 历史浏览游标：纯前端临时状态，不需要持久化，每个"分类"（时间方向+身份+同人作品名）各有自己的游标
+const historyCursor = {};
+
+function getCurrentScopeKey() {
+    return getMemoryScopeKey(getSettings());
+}
+
+function refreshHistoryNav() {
+    const scopeKey = getCurrentScopeKey();
+    const list = getHistoryList(scopeKey);
+    if (!(scopeKey in historyCursor) || historyCursor[scopeKey] > list.length - 1) {
+        historyCursor[scopeKey] = list.length - 1; // 默认指向最新一条
+    }
+    const idx = historyCursor[scopeKey];
+    const total = list.length;
+    $('.future-observer-history-index').text(total ? `第 ${idx + 1}/${total} 条` : '暂无历史');
+    $('.future-observer-history-prev').prop('disabled', idx <= 0);
+    $('.future-observer-history-next').prop('disabled', total === 0 || idx >= total - 1);
+}
+
+function showHistoryAt(scopeKey, idx) {
+    const list = getHistoryList(scopeKey);
+    if (idx < 0 || idx >= list.length) return;
+    historyCursor[scopeKey] = idx;
+    const entry = list[idx];
+    $('.future-observer-result').each(function () {
+        renderResultInto($(this), entry.text);
+    });
+    refreshHistoryNav();
 }
 
 async function generateObservation() {
@@ -410,6 +563,15 @@ async function generateObservation() {
         resultBoxes.each(function () {
             renderResultInto($(this), result);
         });
+
+        const scopeKey = getMemoryScopeKey(settings);
+        await pushHistoryEntry(scopeKey, result); // 历史记录不受"记忆开关"影响，一直都会存
+        historyCursor[scopeKey] = getHistoryList(scopeKey).length - 1; // 新生成的这条，游标指向最新
+        refreshHistoryNav();
+
+        if (settings.memoryEnabled) {
+            await saveMemoryEntry(scopeKey, result);
+        }
     } catch (error) {
         console.error('[观察者论坛]', error);
         let msg = error?.message || String(error);
@@ -440,12 +602,15 @@ function syncControlsFromSettings() {
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
+    $('#future-observer-popup-weibo-toggle').prop('checked', !!settings.weiboMode);
+    $('#future-observer-popup-memory-toggle').prop('checked', !!settings.memoryEnabled);
 
     $('.future-observer-direction-select').val(settings.timeDirection);
     $('.future-observer-identity-select').each(function () {
         renderIdentityOptions($(this), settings.timeDirection, settings.identity);
     });
     applyPopupTheme();
+    refreshHistoryNav();
 
     // 只有"异世界·同人模式"才显示作品名输入框（目前只放在悬浮球弹窗里）
     const showFandomInput = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
@@ -486,6 +651,18 @@ function bindSharedControls() {
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
 
+    $(document).off('click.futureObserverHistoryPrev').on('click.futureObserverHistoryPrev', '.future-observer-history-prev', function () {
+        const scopeKey = getCurrentScopeKey();
+        const idx = (historyCursor[scopeKey] ?? getHistoryList(scopeKey).length - 1) - 1;
+        showHistoryAt(scopeKey, idx);
+    });
+
+    $(document).off('click.futureObserverHistoryNext').on('click.futureObserverHistoryNext', '.future-observer-history-next', function () {
+        const scopeKey = getCurrentScopeKey();
+        const idx = (historyCursor[scopeKey] ?? getHistoryList(scopeKey).length - 1) + 1;
+        showHistoryAt(scopeKey, idx);
+    });
+
     $('#future-observer-count').off('change').on('change', function () {
         const settings = getSettings();
         settings.messageCount = Math.max(1, Math.min(50, Number($(this).val()) || 10));
@@ -510,6 +687,18 @@ function bindSharedControls() {
     $('#future-observer-worldinfo-toggle').off('change').on('change', function () {
         const settings = getSettings();
         settings.worldInfoEnabled = $(this).is(':checked');
+        saveSettings();
+    });
+
+    $('#future-observer-popup-weibo-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.weiboMode = $(this).is(':checked');
+        saveSettings();
+    });
+
+    $('#future-observer-popup-memory-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.memoryEnabled = $(this).is(':checked');
         saveSettings();
     });
 
@@ -586,8 +775,15 @@ function buildFloatingUI() {
                 </select>
                 <select class="future-observer-identity-select"></select>
                 <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等" style="display:none;">
+                <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-weibo-toggle"> 微博体（先发主贴，评论围绕主贴讨论）</label>
+                <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
             </div>
             <button class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
+            <div class="future-observer-history-nav">
+                <button type="button" class="future-observer-history-prev menu_button" title="上一条">◀</button>
+                <span class="future-observer-history-index">暂无历史</span>
+                <button type="button" class="future-observer-history-next menu_button" title="下一条">▶</button>
+            </div>
             <div class="future-observer-result future-observer-popup-result">点击“生成评论区”查看。</div>
         </div>
     `);
