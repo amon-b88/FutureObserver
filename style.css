@@ -62,6 +62,24 @@
     line-height:1.5;
     opacity:.92;
 }
+.future-observer-line-text{display:inline}
+/* "采纳"按钮：只在同人模式下才会出现，挂在每条楼层文字后面 */
+.future-observer-adopt-btn{
+    display:inline-block;
+    margin-left:8px;
+    padding:1px 8px;
+    font-size:.82em;
+    line-height:1.6;
+    border-radius:6px;
+    border:1px solid rgba(var(--fo-accent,127,180,255),.4);
+    background:rgba(var(--fo-accent,127,180,255),.1);
+    color:inherit;
+    cursor:pointer;
+    vertical-align:middle;
+}
+.future-observer-adopt-btn:hover{
+    background:rgba(var(--fo-accent,127,180,255),.22);
+}
 /* 微博体的"主贴"，比普通楼层更醒目，视觉上一眼看出这是帖子标题 */
 .future-observer-mainpost{
     padding:10px 12px;

@@ -138,7 +138,8 @@ function buildFandomIdentityText(work, isSameWorld) {
 评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
 1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
 3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
-这条"网名+括号真名"的格式规则，只在这个同人模式下使用。`;
+这条"网名+括号真名"的格式规则，只在这个同人模式下使用。
+如果某位评论者提到"要来帮忙""要送/给点什么"这类实际行动，所提供的帮助/物品力度要匹配这个角色在原作里真实的身份地位和能力等级（比如战力顶尖的强者，就不该随口说要送一把普通铁剑这种不符身份的东西），同时也要考虑别让这类帮助严重打破当前故事本身的剧情节奏和强度平衡。`;
 
     if (isSameWorld) {
         return `${base}
@@ -487,10 +488,44 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;');
 }
 
+// 从同人模式的一行评论里，拆出"网名（真名）：内容"这几块，用于"采纳"功能。
+// 解析不出来就返回 null（比如AI这次没按格式写），调用方要自己处理这种情况。
+function parseFandomLine(rawLine) {
+    let text = String(rawLine || '').trim();
+    // 去掉开头的楼层编号，例如 "12楼 - " 或 "12楼 - 回复3楼 "
+    text = text.replace(/^\d+\s*楼\s*[-—－]?\s*/, '');
+    text = text.replace(/回复\s*\d+\s*楼\s*/, '');
+
+    const match = text.match(/^(.*?)[（(]([^（）()]+)[）)]\s*[:：]\s*([\s\S]*)$/);
+    if (!match) return null;
+
+    const realName = match[2].trim();
+    const content = match[3].trim();
+    if (!realName || !content) return null;
+    return { realName, content };
+}
+
+// 把一条同人评论"采纳"进酒馆自己的正文输入框，格式化成 /sendas 指令，
+// 交给你自己看一眼、编辑、决定要不要发送——插件不会自己往聊天记录里硬插东西。
+function adoptToInput(realName, content) {
+    const textarea = document.getElementById('send_textarea');
+    if (!textarea) {
+        toastr.warning('没找到酒馆的输入框，请手动复制这条内容。', '观察者论坛');
+        return;
+    }
+    const safeName = String(realName).replace(/"/g, '\\"');
+    const command = `/sendas name="${safeName}" ${content}`;
+    textarea.value = command;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.focus();
+    toastr.success('已填入输入框，确认没问题再自己点发送。', '观察者论坛');
+}
+
 // 把生成结果（纯文本，"1楼 - xxx：..." / "└ 2楼 - xxx 回复1楼：..." 这种格式）
 // 解析成一张张"楼层卡片"。判断"是不是跟帖"用的是尽量宽松的规则——
 // 这终究是在猜AI输出的文字格式，不可能100%准确，猜不中的话就当普通主楼显示，不影响阅读。
-function renderResultInto($el, rawText) {
+// showAdopt: 是否在每条楼层后面加"采纳"按钮（只在同人模式下才有意义，因为要靠"网名（真名）"这个格式提取真名）
+function renderResultInto($el, rawText, showAdopt) {
     const text = String(rawText || '').trim();
     if (!text) {
         $el.text('没有得到结果。');
@@ -499,6 +534,8 @@ function renderResultInto($el, rawText) {
 
     const rawLines = text.split(/\r?\n/).filter(l => l.trim());
     let html = '';
+    const floorLines = []; // 跟 .future-observer-comment / .future-observer-reply 渲染顺序一一对应，用于事后挂"采纳"按钮的数据
+
     for (const rawLine of rawLines) {
         const hadLeadingSpace = /^[ \t　]+/.test(rawLine);
         const line = rawLine.trim();
@@ -518,11 +555,25 @@ function renderResultInto($el, rawText) {
         const cleaned = line.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
         const escaped = escapeHtml(cleaned);
         html += isReply
-            ? `<div class="future-observer-reply">${escaped}</div>`
-            : `<div class="future-observer-comment">${escaped}</div>`;
+            ? `<div class="future-observer-reply"><span class="future-observer-line-text">${escaped}</span></div>`
+            : `<div class="future-observer-comment"><span class="future-observer-line-text">${escaped}</span></div>`;
+        floorLines.push(cleaned);
     }
 
     $el.html(html || escapeHtml(text));
+
+    if (showAdopt) {
+        const floors = $el.find('.future-observer-comment, .future-observer-reply');
+        floors.each(function (i) {
+            const raw = floorLines[i];
+            const parsed = raw ? parseFandomLine(raw) : null;
+            if (!parsed) return; // 这行解析不出"网名（真名）"格式，就不加采纳按钮
+            const btn = $('<button type="button" class="future-observer-adopt-btn" title="采纳到酒馆输入框">📥 采纳</button>');
+            btn.data('fo-name', parsed.realName);
+            btn.data('fo-content', parsed.content);
+            $(this).append(btn);
+        });
+    }
 }
 
 // 历史浏览游标：纯前端临时状态，不需要持久化，每个"分类"（时间方向+身份+同人作品名）各有自己的游标
@@ -550,8 +601,10 @@ function showHistoryAt(scopeKey, idx) {
     if (idx < 0 || idx >= list.length) return;
     historyCursor[scopeKey] = idx;
     const entry = list[idx];
+    const settings = getSettings();
+    const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
     $('.future-observer-result').each(function () {
-        renderResultInto($(this), entry.text);
+        renderResultInto($(this), entry.text, showAdopt);
     });
     refreshHistoryNav();
 }
@@ -589,8 +642,9 @@ async function generateObservation() {
             });
         }
 
+        const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
         resultBoxes.each(function () {
-            renderResultInto($(this), result);
+            renderResultInto($(this), result, showAdopt);
         });
 
         const scopeKey = getMemoryScopeKey(settings);
@@ -687,6 +741,14 @@ function bindSharedControls() {
     });
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
+
+    $(document).off('click.futureObserverAdopt').on('click.futureObserverAdopt', '.future-observer-adopt-btn', function (e) {
+        e.stopPropagation();
+        const name = $(this).data('fo-name');
+        const content = $(this).data('fo-content');
+        if (!name || !content) return;
+        adoptToInput(name, content);
+    });
 
     $(document).off('click.futureObserverHistoryPrev').on('click.futureObserverHistoryPrev', '.future-observer-history-prev', function () {
         const scopeKey = getCurrentScopeKey();
