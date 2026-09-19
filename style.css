@@ -201,6 +201,69 @@
     opacity:.9;
     cursor:pointer;
 }
+
+/* 作品名输入框 + 历史下拉箭头 */
+.future-observer-fandom-work-wrap{
+    position:relative;
+    display:flex;
+    align-items:center;
+    gap:4px;
+    width:100%;
+}
+.future-observer-fandom-work-wrap input[type="text"]{
+    flex:1;
+    min-width:0;
+}
+#future-observer-fandom-history-arrow{
+    flex-shrink:0;
+    user-select:none;
+}
+.future-observer-fandom-history-list{
+    position:absolute;
+    top:100%;
+    left:0;
+    right:0;
+    margin-top:4px;
+    max-height:160px;
+    overflow-y:auto;
+    background:rgba(20,20,22,.98);
+    border:1px solid rgba(var(--fo-accent,150,150,160),.35);
+    border-radius:8px;
+    box-shadow:0 4px 12px rgba(0,0,0,.4);
+    z-index:10000;
+}
+.future-observer-fandom-history-item{
+    padding:6px 10px;
+    font-size:.88em;
+    cursor:pointer;
+}
+.future-observer-fandom-history-item:hover{
+    background:rgba(var(--fo-accent,150,150,160),.15);
+}
+.future-observer-fandom-history-empty{
+    padding:6px 10px;
+    font-size:.85em;
+    opacity:.6;
+}
+
+/* 重置选项按钮 */
+.future-observer-reset-btn{
+    align-self:flex-end;
+    margin-top:-2px;
+    padding:2px 10px;
+    font-size:.82em;
+    border-radius:6px;
+    border:1px solid rgba(255,255,255,.2);
+    background:rgba(255,255,255,.05);
+    color:inherit;
+    opacity:.75;
+    cursor:pointer;
+}
+.future-observer-reset-btn:hover{
+    opacity:1;
+    background:rgba(255,255,255,.1);
+}
+
 /* 显式给按钮和结果区算出确切宽度，不依赖 flex 的 stretch 行为
    （在部分酒馆主题下 stretch 不生效，会导致按钮/结果区收缩成
    逐字换行的竖条，这里直接用 calc 强制撑满宽度） */

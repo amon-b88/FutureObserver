@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
+    fandomWorkHistory: [], // 之前填过的作品名，最新的在最前面，供输入框旁边的历史下拉用
     fandomSameWorld: false, // 剧情本身就发生在这部作品的世界里（穿越/同人卡），而不是外部围观
     weiboMode: false, // 微博体：先发一条主贴，评论都围绕主贴的具体观点展开
     memoryEnabled: false, // 记忆开关：这次生成会参考"同一类评论者"上一次讨论的内容
@@ -678,6 +679,42 @@ function renderIdentityOptions($select, direction, currentValue) {
     $select.val(validValues.includes(currentValue) ? currentValue : validValues[0]);
 }
 
+const FANDOM_WORK_HISTORY_MAX = 8;
+
+function rememberFandomWork(work) {
+    const trimmed = String(work || '').trim();
+    if (!trimmed) return;
+    const settings = getSettings();
+    const history = Array.isArray(settings.fandomWorkHistory) ? settings.fandomWorkHistory : [];
+    const deduped = [trimmed, ...history.filter(w => w !== trimmed)].slice(0, FANDOM_WORK_HISTORY_MAX);
+    settings.fandomWorkHistory = deduped;
+    saveSettings();
+}
+
+function renderFandomHistoryList() {
+    const settings = getSettings();
+    const history = Array.isArray(settings.fandomWorkHistory) ? settings.fandomWorkHistory : [];
+    const $list = $('#future-observer-fandom-history-list');
+    if (!history.length) {
+        $list.html('<div class="future-observer-fandom-history-empty">还没有填过作品名</div>');
+        return;
+    }
+    $list.empty();
+    for (const work of history) {
+        $list.append($('<div class="future-observer-fandom-history-item"></div>').text(work));
+    }
+}
+
+function toggleFandomHistoryList() {
+    const $list = $('#future-observer-fandom-history-list');
+    if ($list.is(':visible')) {
+        $list.hide();
+        return;
+    }
+    renderFandomHistoryList();
+    $list.show();
+}
+
 function syncControlsFromSettings() {
     const settings = getSettings();
 
@@ -698,7 +735,9 @@ function syncControlsFromSettings() {
 
     // 只有"异世界·同人模式"才显示作品名输入框和"同一个世界"勾选框（目前只放在悬浮球弹窗里）
     const showFandomInput = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
-    $('#future-observer-fandom-work').val(settings.fandomWork || '').toggle(showFandomInput);
+    $('#future-observer-fandom-work').val(settings.fandomWork || '');
+    $('#future-observer-fandom-work-wrap').toggle(showFandomInput);
+    $('#future-observer-fandom-history-list').hide();
     $('#future-observer-fandom-sameworld').prop('checked', !!settings.fandomSameWorld).closest('label').toggle(showFandomInput);
 
     $('#future-observer-customapi-toggle').prop('checked', !!settings.customApi?.enabled);
@@ -731,7 +770,39 @@ function bindSharedControls() {
     $(document).off('change.futureObserverFandomWork').on('change.futureObserverFandomWork', '#future-observer-fandom-work', function () {
         const settings = getSettings();
         settings.fandomWork = String($(this).val()).trim();
+        rememberFandomWork(settings.fandomWork);
         saveSettings();
+    });
+
+    $(document).off('click.futureObserverFandomHistoryArrow').on('click.futureObserverFandomHistoryArrow', '#future-observer-fandom-history-arrow', function (e) {
+        e.stopPropagation();
+        toggleFandomHistoryList();
+    });
+
+    $(document).off('click.futureObserverFandomHistoryItem').on('click.futureObserverFandomHistoryItem', '.future-observer-fandom-history-item', function () {
+        const settings = getSettings();
+        const value = $(this).text();
+        settings.fandomWork = value;
+        $('#future-observer-fandom-work').val(value);
+        saveSettings();
+        $('#future-observer-fandom-history-list').hide();
+    });
+
+    $(document).off('mousedown.futureObserverFandomHistoryOutside').on('mousedown.futureObserverFandomHistoryOutside', function (e) {
+        if (!$('#future-observer-fandom-history-list').is(':visible')) return;
+        if ($(e.target).closest('#future-observer-fandom-work-wrap').length) return;
+        $('#future-observer-fandom-history-list').hide();
+    });
+
+    $(document).off('click.futureObserverResetOptions').on('click.futureObserverResetOptions', '#future-observer-reset-options', function () {
+        const settings = getSettings();
+        settings.fandomWork = '';
+        settings.fandomSameWorld = false;
+        settings.weiboMode = false;
+        settings.memoryEnabled = false;
+        saveSettings();
+        syncControlsFromSettings();
+        toastr.info('作品名 / 穿越世界 / 微博体 / 记忆已重置。', '观察者论坛');
     });
 
     $(document).off('change.futureObserverFandomSameWorld').on('change.futureObserverFandomSameWorld', '#future-observer-fandom-sameworld', function () {
@@ -882,10 +953,15 @@ function buildFloatingUI() {
                     <option value="otherworld">异世界</option>
                 </select>
                 <select class="future-observer-identity-select"></select>
-                <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等" style="display:none;">
+                <div id="future-observer-fandom-work-wrap" class="future-observer-fandom-work-wrap" style="display:none;">
+                    <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等">
+                    <span id="future-observer-fandom-history-arrow" class="future-observer-popup-icon-btn" title="之前填过的作品">▾</span>
+                    <div id="future-observer-fandom-history-list" class="future-observer-fandom-history-list" style="display:none;"></div>
+                </div>
                 <label class="future-observer-popup-checkbox" style="display:none;"><input type="checkbox" id="future-observer-fandom-sameworld"> 剧情本身就发生在这部作品的世界里（穿越/同人卡）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-weibo-toggle"> 微博体（先发主贴，评论围绕主贴讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
+                <button type="button" id="future-observer-reset-options" class="future-observer-reset-btn" title="把作品名/穿越世界/微博体/记忆这几个选项清空复位">↺ 重置选项</button>
             </div>
             <button class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
             <div class="future-observer-history-nav">
