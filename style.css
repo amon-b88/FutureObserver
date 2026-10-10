@@ -97,6 +97,16 @@
     padding:8px 10px;
     border-left:2px solid rgba(255,255,255,.15);
 }
+/* 模型名通常比较长，"可选模型"下拉框撑满这一行，不受通用 select 的最大宽度限制 */
+#future-observer-customapi-model-select{
+    flex:1;
+    min-width:200px;
+    max-width:100%;
+}
+#future-observer-customapi-fetch-models{
+    flex-shrink:0;
+    white-space:nowrap;
+}
 .future-observer-customapi-note{
     opacity:.75;
     font-size:.85em;

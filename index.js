@@ -42,6 +42,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         endpoint: '',
         apiKey: '',
         model: '',
+        modelList: [], // 上次从端点获取到的可选模型列表，刷新页面后还在，不用每次重新获取
     }),
 });
 
@@ -259,7 +260,7 @@ function getSettings() {
     } else {
         for (const key of Object.keys(DEFAULT_SETTINGS.customApi)) {
             if (!(key in settings.customApi)) {
-                settings.customApi[key] = DEFAULT_SETTINGS.customApi[key];
+                settings.customApi[key] = structuredClone(DEFAULT_SETTINGS.customApi[key]);
             }
         }
     }
@@ -480,6 +481,93 @@ async function callCustomApi(prompt, apiConfig) {
         throw new Error('自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
     }
     return content;
+}
+
+// 根据已保存的模型列表，渲染"可选模型"下拉框；没有列表时整行隐藏
+function renderCustomApiModelSelect() {
+    const settings = getSettings();
+    const list = Array.isArray(settings.customApi?.modelList) ? settings.customApi.modelList : [];
+    const $row = $('#future-observer-customapi-model-select-row');
+    const $select = $('#future-observer-customapi-model-select');
+    if (!$row.length) return;
+    if (!list.length) {
+        $row.hide();
+        return;
+    }
+    $select.empty().append($('<option>', { value: '', text: `— 从列表中选择（共 ${list.length} 个）—` }));
+    for (const id of list) {
+        $select.append($('<option>', { value: id, text: id }));
+    }
+    const current = String(settings.customApi?.model || '');
+    $select.val(list.includes(current) ? current : '');
+    $row.show();
+}
+
+// 向端点查询"有哪些可用模型"（OpenAI 兼容接口的标准查询：GET {端点}/models），
+// 成功后存起来并渲染成下拉框，省得自己手打模型名。
+async function fetchCustomApiModels() {
+    const settings = getSettings();
+    const api = settings.customApi;
+
+    // 直接从输入框读取最新值（点按钮的瞬间输入框的 change 事件不一定已经保存完），并顺手同步回设置
+    api.endpoint = String($('#future-observer-customapi-endpoint').val() ?? api.endpoint ?? '').trim();
+    api.apiKey = String($('#future-observer-customapi-key').val() ?? api.apiKey ?? '').trim();
+
+    if (!api.endpoint) {
+        toastr.warning('请先填写端点 URL。', '观察者论坛');
+        return;
+    }
+
+    // 填的可能是 .../v1，也可能是完整的 .../v1/chat/completions，统一退回到根路径再拼 /models
+    const base = api.endpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+    const url = `${base}/models`;
+
+    const headers = {};
+    if (api.apiKey) {
+        headers['Authorization'] = `Bearer ${api.apiKey}`;
+    }
+
+    const $btn = $('#future-observer-customapi-fetch-models');
+    $btn.prop('disabled', true).text('获取中…');
+    try {
+        const response = await fetch(url, { method: 'GET', headers });
+        if (!response.ok) {
+            let detail = '';
+            try { detail = (await response.text()).slice(0, 200); } catch { /* 忽略读取失败 */ }
+            throw new Error(`状态码 ${response.status}${detail ? '：' + detail : ''}`);
+        }
+
+        const data = await response.json();
+        // 不同服务返回的结构略有差异，尽量兼容：{data:[...]} / {models:[...]} / 直接是数组
+        const rawList = Array.isArray(data?.data) ? data.data
+            : Array.isArray(data?.models) ? data.models
+                : Array.isArray(data) ? data : [];
+        const ids = [...new Set(
+            rawList
+                .map(item => (typeof item === 'string' ? item : (item?.id || item?.name || '')))
+                .map(name => String(name).trim())
+                .filter(Boolean),
+        )].sort((a, b) => a.localeCompare(b));
+
+        if (!ids.length) {
+            toastr.warning('请求成功了，但没解析出任何模型名称（这个服务返回的格式可能比较特殊），请手动填写模型名称。', '观察者论坛');
+            return;
+        }
+
+        api.modelList = ids.slice(0, 500);
+        saveSettings();
+        renderCustomApiModelSelect();
+        toastr.success(`获取到 ${ids.length} 个模型，请在下面的“可选模型”下拉框里选择。`, '观察者论坛');
+    } catch (error) {
+        console.error('[观察者论坛] 获取模型列表失败：', error);
+        let msg = error?.message || String(error);
+        if (error instanceof TypeError) {
+            msg += '（可能是网络问题，或者该服务不支持浏览器直接跨域访问 CORS，也可能这个服务压根没有提供模型列表接口）';
+        }
+        toastr.error(`获取模型列表失败：${msg}。你仍然可以手动填写模型名称。`, '观察者论坛');
+    } finally {
+        $btn.prop('disabled', false).text('🔄 获取列表');
+    }
 }
 
 function escapeHtml(str) {
@@ -745,6 +833,7 @@ function syncControlsFromSettings() {
     $('#future-observer-customapi-endpoint').val(settings.customApi?.endpoint || '');
     $('#future-observer-customapi-key').val(settings.customApi?.apiKey || '');
     $('#future-observer-customapi-model').val(settings.customApi?.model || '');
+    renderCustomApiModelSelect();
 }
 
 function bindSharedControls() {
@@ -812,6 +901,17 @@ function bindSharedControls() {
     });
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
+
+    $(document).off('click.futureObserverFetchModels').on('click.futureObserverFetchModels', '#future-observer-customapi-fetch-models', fetchCustomApiModels);
+
+    $(document).off('change.futureObserverModelSelect').on('change.futureObserverModelSelect', '#future-observer-customapi-model-select', function () {
+        const picked = String($(this).val() || '');
+        if (!picked) return; // 选的是顶部提示项，不处理
+        const settings = getSettings();
+        settings.customApi.model = picked;
+        $('#future-observer-customapi-model').val(picked);
+        saveSettings();
+    });
 
     $(document).off('click.futureObserverAdopt').on('click.futureObserverAdopt', '.future-observer-adopt-btn', function (e) {
         e.stopPropagation();
@@ -904,6 +1004,7 @@ function bindSharedControls() {
         const settings = getSettings();
         settings.customApi.model = String($(this).val()).trim();
         saveSettings();
+        renderCustomApiModelSelect(); // 手动改了模型名，下拉框也跟着同步选中状态
     });
 }
 

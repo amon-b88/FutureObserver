@@ -47,7 +47,12 @@
                 </div>
                 <div class="future-observer-row">
                     <label>模型名称</label>
-                    <input type="text" id="future-observer-customapi-model" placeholder="例如 gpt-4o-mini、deepseek-chat">
+                    <input type="text" id="future-observer-customapi-model" placeholder="手动填写，或点右边按钮获取列表后选择">
+                    <button type="button" id="future-observer-customapi-fetch-models" class="menu_button" title="用上面填的端点和密钥，查询这个服务有哪些可用模型">🔄 获取列表</button>
+                </div>
+                <div class="future-observer-row" id="future-observer-customapi-model-select-row" style="display:none;">
+                    <label>可选模型</label>
+                    <select id="future-observer-customapi-model-select"></select>
                 </div>
                 <div class="future-observer-customapi-note">
                     ⚠️ 密钥会以明文形式保存在酒馆的插件设置里，不是酒馆官方推荐的加密存储方式。请不要把你的设置文件/设置截图分享给他人，仅在自己使用的设备上填写。
