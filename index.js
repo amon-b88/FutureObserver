@@ -22,6 +22,7 @@ const EXTENSION_NAME = (() => {
 const DEFAULT_SETTINGS = Object.freeze({
     messageCount: 10,
     aiOnly: false,
+    stripOptions: true, // 读取聊天时，自动删掉每楼末尾的 <action>…</action> 选项区（预设生成的待选项，不是已发生的剧情）
     maxChars: 14000,
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
@@ -287,6 +288,19 @@ function saveSettings() {
     getContext().saveSettingsDebounced();
 }
 
+// 删掉预设在楼层末尾生成的"待选项"区块（<action>…</action>，里面是 [Opt1:😇] 这种选项），
+// 这些是还没被选的备选，不是真正发生的剧情，不应该让观察者去评论。
+function stripOptionBlocks(text) {
+    let t = String(text ?? '');
+    // 1) 完整的 <action>…</action> 区块
+    t = t.replace(/<action>[\s\S]*?<\/action>/gi, '');
+    // 2) 只有开头 <action> 没有结尾（输出被截断的情况）：从 <action> 一直删到末尾
+    t = t.replace(/<action>[\s\S]*$/i, '');
+    // 3) 兜底：没有标签、但还留着 [Opt1:xx] 开头的单独成行的选项
+    t = t.replace(/^[ \t]*\[Opt\d+\s*[:：][^\]]*\].*$/gim, '');
+    return t.trim();
+}
+
 function getRecentChat() {
     const ctx = getContext();
     const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
@@ -307,7 +321,8 @@ function getRecentChat() {
             ? (ctx.name1 || '用户')
             : (m.name || ctx.name2 || '角色');
 
-        const text = String(m.mes ?? '').trim();
+        let text = String(m.mes ?? '').trim();
+        if (settings.stripOptions !== false) text = stripOptionBlocks(text);
         if (!text) continue;
 
         lines.unshift(`【${name}】\n${text}`); // 从后往前收集的，最后要倒回正常的时间顺序
@@ -808,6 +823,7 @@ function syncControlsFromSettings() {
 
     $('#future-observer-count').val(settings.messageCount);
     $('#future-observer-aionly-toggle').prop('checked', !!settings.aiOnly);
+    $('#future-observer-stripoptions-toggle').prop('checked', settings.stripOptions !== false);
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
@@ -943,6 +959,12 @@ function bindSharedControls() {
     $('#future-observer-aionly-toggle').off('change').on('change', function () {
         const settings = getSettings();
         settings.aiOnly = $(this).is(':checked');
+        saveSettings();
+    });
+
+    $('#future-observer-stripoptions-toggle').off('change').on('change', function () {
+        const settings = getSettings();
+        settings.stripOptions = $(this).is(':checked');
         saveSettings();
     });
 
