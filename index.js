@@ -26,6 +26,10 @@ const DEFAULT_SETTINGS = Object.freeze({
     maxChars: 14000,
     richness: 'rich', // 内容量：'brief' | 'normal' | 'rich' | 'epic'
     planFirst: true, // 先构思再写正文（更充实，更耗时；构思部分会被自动删掉）
+    skin: 'forum', // 载体：'forum' | 'news' | 'chat' | 'danmaku'
+    hotComments: false, // 热评：给评论标赞数，热门的置顶（仅论坛/新闻载体）
+    protagonistMode: false, // 主角是否参与讨论；关闭时主角不会出现在评论里
+    protagonistName: '', // 主角名，留空=用酒馆里你的用户名
     maxOutputTokens: 0, // 最大输出长度，0=不指定（用接口/酒馆自己的默认值）
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
@@ -291,7 +295,7 @@ function saveSettings() {
     getContext().saveSettingsDebounced();
 }
 
-// 删掉预设在楼层末尾生成的"待选项"区块（<action>…</action>，里面是 [Opt1:😇] 这种选项），
+// 删掉预设在楼层里附带的非剧情内容：末尾的"待选项"区块（<action>…</action>，里面是 [Opt1:😇] 这种选项）和 <summary> 摘要，
 // 这些是还没被选的备选，不是真正发生的剧情，不应该让观察者去评论。
 function stripOptionBlocks(text) {
     let t = String(text ?? '');
@@ -301,6 +305,9 @@ function stripOptionBlocks(text) {
     t = t.replace(/<action>[\s\S]*$/i, '');
     // 3) 兜底：没有标签、但还留着 [Opt1:xx] 开头的单独成行的选项
     t = t.replace(/^[ \t]*\[Opt\d+\s*[:：][^\]]*\].*$/gim, '');
+    // 4) 剧情摘要 <summary>…</summary>：不是剧情本身，也不让评论者看到
+    t = t.replace(/<summary>[\s\S]*?<\/summary>/gi, '');
+    t = t.replace(/<\/?summary>/gi, ''); // 只剩单个残留标签时，把标签本身去掉
     return t.trim();
 }
 
@@ -415,6 +422,51 @@ function getRichnessSpec(settings) {
     return RICHNESS_SPECS[settings.richness] || RICHNESS_SPECS.rich;
 }
 
+// ==================== 载体（皮肤） ====================
+// 同一段剧情可以换不同的"载体"来看。皮肤只影响提示词里的语气要求和界面排版，
+// 不会多调用一次AI，所以不增加按次计费的成本。
+const SKIN_OPTIONS = [
+    { value: 'forum', label: '论坛楼层' },
+    { value: 'news', label: '新闻评论区' },
+    { value: 'chat', label: '群聊' },
+    { value: 'danmaku', label: '弹幕' },
+];
+
+const SKIN_SPECS = {
+    forum: {
+        floorMul: 1, replyMul: 1, noReplies: false, hotAllowed: true, lengthText: null, promptText: '',
+    },
+    news: {
+        floorMul: 1, replyMul: 1, noReplies: false, hotAllowed: true, lengthText: null,
+        promptText: '【载体：新闻评论区】这段剧情被当作一则新闻，评论者是新闻底下的跟评网友：有人引用新闻里的某个说法反驳，有人阴阳怪气，有人理中客，有人玩梗；"回|"行表示盖楼回复。整体语气接近真实的新闻评论区。',
+    },
+    chat: {
+        floorMul: 1.6, replyMul: 0.5, noReplies: false, hotAllowed: false,
+        lengthText: '绝大多数是一两句话的短消息（8～50字），偶尔有人一口气发一段较长的（80～150字），整体口语化',
+        promptText: '【载体：即时聊天群】这些评论是一个聊天群里的消息，不是论坛帖子。像真实群聊：句子偏短、口语化，可以连发、插话、被打断、互相@或引用回复，偶尔发表情文字；"回|"行表示引用并回复了某条消息。整体偏短，不要写成长篇大论。',
+    },
+    danmaku: {
+        floorMul: 2.5, replyMul: 0, noReplies: true, hotAllowed: false,
+        lengthText: '每条只有一句话，6～30字，最长不超过40字',
+        promptText: '【载体：视频弹幕】这些评论是飘过屏幕的弹幕，不是论坛帖子。每条只有一句话，短促、情绪化、爱玩梗，可以出现刷屏式的复读和接龙、"前方高能""名场面""？？？"这类弹幕式表达，但仍要结合剧情里的具体细节。不要使用"回|"跟帖行，所有弹幕都用"楼|"格式，网名随手起个短的就行。',
+    },
+};
+
+function getSkinSpec(settings) {
+    return SKIN_SPECS[settings.skin] || SKIN_SPECS.forum;
+}
+
+// 主角名：优先用设置里手填的，留空就用酒馆里你的用户名
+function getProtagonistName() {
+    const custom = String(getSettings().protagonistName || '').trim();
+    if (custom) return custom;
+    try {
+        return String(getContext().name1 || '').trim();
+    } catch {
+        return '';
+    }
+}
+
 // 读取当前聊天关键词命中的世界书内容（不是整本世界书，是酒馆按关键词触发出来的那部分）。
 // 失败/不支持的情况一律静默跳过，不影响正常生成。
 async function getWorldInfoText() {
@@ -446,8 +498,13 @@ async function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
     const spec = getRichnessSpec(settings);
-    const [floorMin, floorMax] = spec.floors;
-    const [replyMin, replyMax] = spec.replies;
+    const skin = getSkinSpec(settings);
+    const floorMin = Math.max(5, Math.round(spec.floors[0] * skin.floorMul));
+    const floorMax = Math.max(floorMin, Math.round(spec.floors[1] * skin.floorMul));
+    const replyMin = skin.noReplies ? 0 : Math.max(1, Math.round(spec.replies[0] * skin.replyMul));
+    const replyMax = skin.noReplies ? 0 : Math.max(replyMin, Math.round(spec.replies[1] * skin.replyMul));
+    const hotOn = !!settings.hotComments && skin.hotAllowed;
+    const protagonist = getProtagonistName();
     const [personaMin, personaMax] = spec.personas;
     const angles = pickRandom(DISCUSSION_ANGLES, spec.angles);
     const voices = pickRandom(VOICE_STYLES, 5);
@@ -491,6 +548,27 @@ ${lastMemory}
         }
     }
 
+    let protagonistBlock = '';
+    if (protagonist) {
+        protagonistBlock = settings.protagonistMode
+            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在评论者里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（主楼和跟帖合计），而且不能连续两条都是他。\n- 每次发言二选一：发表自己对这件事的感想；或者回复论坛里某个具体的人${skin.noReplies ? '（此载体没有跟帖，直接在内容里点名对方）' : '（用"回|"格式，并填对被回复的楼层编号）'}。\n- 不要每条评论都去回复，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
+            : `\n\n【主角回避】\n故事的主角是「${protagonist}」。评论者里不得出现主角本人，也不要以他的身份或口吻发言；评论里需要提到他时，只能以第三方的口吻谈论他。`;
+    }
+
+    const likeField = hotOn ? '赞数|' : '';
+    const likeEx = hotOn ? ['128|', '9|', '2315|', '41|', '0|'] : ['', '', '', '', ''];
+    const formatLines = skin.noReplies
+        ? [`楼|1|某某|${likeEx[0]}……`, `楼|2|某某|${likeEx[1]}……`, `楼|3|某某|${likeEx[2]}……`]
+        : [`楼|1|某某|${likeEx[0]}……`, `楼|2|某某|${likeEx[1]}……`, `回|3|2|某某|${likeEx[2]}……`, `回|4|3|某某|${likeEx[3]}……`, `楼|5|某某|${likeEx[4]}……`];
+    const formatBlock = `【输出格式——必须严格遵守，程序靠这个格式识别楼层】
+每条评论单独占一行（评论里需要分段时，用空格或"／"代替换行，不要在一条评论中间换行），格式固定为：
+主楼：楼|楼层编号|网名|${likeField}评论内容${skin.noReplies ? '' : `\n跟帖：回|楼层编号|被回复的楼层编号|网名|${likeField}评论内容`}
+示例：
+${formatLines.join('\n')}
+- 楼层编号从1开始连续递增${skin.noReplies ? '' : '，主楼和跟帖共用同一个编号序列；跟帖里的"被回复的楼层编号"填它回应的那一楼（可以是主楼，也可以是另一条跟帖）'}。
+${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数很高（几百到几千），大多数只有个位数到几十，个别是0；赞数要和评论的质量、争议度、梗的好笑程度相符——吵得凶的、有洞察的、有梗的更高；跟帖的赞数一般比主楼低。\n' : ''}- 竖线 | 只用来分隔字段，评论内容和网名里都不要再出现竖线。
+- 除了这些格式行，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
+
     const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
     const voiceText = voices.map(v => `- ${v}`).join('\n');
 
@@ -511,7 +589,7 @@ ${DIRECTION_TEXT[direction]}
 
 【评论者身份】
 ${identityText}
-
+${skin.promptText ? '\n' + skin.promptText + '\n' : ''}
 请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一段与当前主线完全分离的"观察者论坛"评论区。
 
 【严格规则】
@@ -525,16 +603,16 @@ ${identityText}
 8. 最后不要总结，不要解释生成过程。
 
 【数量与长度】
-- 生成 ${floorMin}～${floorMax} 条主楼评论；另外再写 ${replyMin}～${replyMax} 条楼中楼跟帖（跟帖不算在主楼数量里）。
-- 字数要有明显起伏，不要每条都差不多长：${spec.lengthText}。
+- 生成 ${floorMin}～${floorMax} 条主楼评论${skin.noReplies ? '' : `；另外再写 ${replyMin}～${replyMax} 条楼中楼跟帖（跟帖不算在主楼数量里）`}。
+- ${skin.lengthText ? '字数安排：' + skin.lengthText : '字数要有明显起伏，不要每条都差不多长：' + spec.lengthText}。
 
 【质量要求——避免千篇一律】
 - 每条评论至少抓住剧情里的一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
 - 不要每条都走"先复述剧情→再表态→再总结升华"的三段式；不要用"这或许就是……""这正是……的意义"这类金句或升华来收尾；少用排比、对仗这类整齐的句子。
 - 每位评论者要有自己的说话习惯、关心的点和立场，不要所有人用同样的句式和语气。
-- 评论者之间要有互动：有人点名反驳、有人接梗、有人被带偏。热门楼层可以有 2～4 条跟帖，还可以出现跟帖回复跟帖；冷门楼层可以没人理。
+${skin.noReplies ? '- 评论者之间要有呼应：有人接梗、有人跟风复读、有人被带偏。' : '- 评论者之间要有互动：有人点名反驳、有人接梗、有人被带偏。热门楼层可以有 2～4 条跟帖，还可以出现跟帖回复跟帖；冷门楼层可以没人理。'}
 - 同一个开头词或口头禅，整个论坛里最多出现两次。
-- 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。
+- 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。${protagonistBlock}
 
 【本次讨论焦点——由程序随机指定，务必每一条都有人谈到】
 ${angleText}
@@ -542,19 +620,7 @@ ${angleText}
 【本次语言风格参考——挑几种分配给不同评论者，按身份适配，不必全用】
 ${voiceText}
 
-【输出格式——必须严格遵守，程序靠这个格式识别楼层】
-每条评论单独占一行（评论里需要分段时，用空格或"／"代替换行，不要在一条评论中间换行），格式固定为：
-主楼：楼|楼层编号|网名|评论内容
-跟帖：回|楼层编号|被回复的楼层编号|网名|评论内容
-示例：
-楼|1|某某|……
-楼|2|某某|……
-回|3|2|某某|……
-回|4|3|某某|……
-楼|5|某某|……
-- 楼层编号从1开始连续递增，主楼和跟帖共用同一个编号序列；跟帖里的"被回复的楼层编号"填它回应的那一楼（可以是主楼，也可以是另一条跟帖）。
-- 竖线 | 只用来分隔字段，评论内容和网名里都不要再出现竖线。
-- 除了这些格式行，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。${weiboBlock}${planBlock}
+${formatBlock}${weiboBlock}${planBlock}
 ${worldInfoBlock}${memoryBlock}
 【剧情片段】
 ${story}
@@ -562,7 +628,8 @@ ${story}
 【观察者评论】`;
 }
 
-async function callCustomApi(prompt, apiConfig, maxTokens) {
+// opts.signal: 用于取消请求；opts.onChunk(textSoFar): 传了就走流式，边收边回调累计文字
+async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     let url = String(apiConfig.endpoint || '').trim();
     if (!url) {
         throw new Error('自定义API的端点URL没有填写');
@@ -576,13 +643,15 @@ async function callCustomApi(prompt, apiConfig, maxTokens) {
         headers['Authorization'] = `Bearer ${apiConfig.apiKey}`;
     }
 
+    const wantStream = typeof opts.onChunk === 'function';
     const response = await fetch(url, {
         method: 'POST',
         headers,
+        signal: opts.signal,
         body: JSON.stringify({
             model: apiConfig.model || undefined,
             messages: [{ role: 'user', content: prompt }],
-            stream: false,
+            stream: wantStream,
             ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         }),
     });
@@ -593,12 +662,75 @@ async function callCustomApi(prompt, apiConfig, maxTokens) {
         throw new Error(`自定义API请求失败（状态码 ${response.status}）${detail ? '：' + detail : ''}`);
     }
 
-    const data = await response.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (!content) {
+    // 不要求流式，或者环境不支持读取流：按普通 JSON 处理
+    if (!wantStream || !response.body || typeof response.body.getReader !== 'function') {
+        const data = await response.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (!content) {
+            throw new Error('自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
+        }
+        return content;
+    }
+
+    // 流式：兼容标准的 SSE（data: {...}）；有的中转站不支持流式、直接返回整段 JSON，也能处理
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let mode = null; // 'sse' | 'json'
+    let buffer = '';
+    let rawJson = '';
+    let acc = '';
+
+    const handleLine = (line) => {
+        const t = line.trim();
+        if (!t.startsWith('data:')) return;
+        const payload = t.slice(5).trim();
+        if (!payload || payload === '[DONE]') return;
+        try {
+            const j = JSON.parse(payload);
+            const delta = j?.choices?.[0]?.delta?.content ?? j?.choices?.[0]?.message?.content;
+            if (typeof delta === 'string' && delta) {
+                acc += delta;
+                opts.onChunk(acc);
+            }
+        } catch { /* 忽略不是JSON的行（比如心跳） */ }
+    };
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (mode === null) {
+            const head = chunk.trimStart();
+            if (!head) continue;
+            mode = head.startsWith('{') ? 'json' : 'sse';
+        }
+        if (mode === 'json') {
+            rawJson += chunk;
+            continue;
+        }
+        buffer += chunk;
+        let nl;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+            handleLine(buffer.slice(0, nl));
+            buffer = buffer.slice(nl + 1);
+        }
+    }
+    if (mode === 'sse' && buffer) handleLine(buffer);
+
+    if (mode === 'json') {
+        let data;
+        try { data = JSON.parse(rawJson); } catch { throw new Error('自定义API返回的内容无法解析'); }
+        const content = data?.choices?.[0]?.message?.content;
+        if (!content) {
+            throw new Error(data?.error?.message || '自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
+        }
+        opts.onChunk(content);
+        return content;
+    }
+    if (!acc) {
         throw new Error('自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
     }
-    return content;
+    return acc;
 }
 
 // 根据已保存的模型列表，渲染"可选模型"下拉框；没有列表时整行隐藏
@@ -730,14 +862,14 @@ function adoptToInput(realName, content) {
 
 // ==================== 解析与渲染 ====================
 // 提示词要求AI按固定格式输出：
-//   主贴|网名|内容          （仅微博体）
-//   楼|编号|网名|内容
-//   回|编号|被回复的编号|网名|内容
-// 程序只认这几种行，其余的行（开场白、分隔线、乱入的标签）一律丢掉，所以不会再出现空格子；
-// 跟帖是明确知道回复的哪一楼的，所以会老老实实挂在那一楼下面。
+//   主贴|网名|内容                          （仅微博体）
+//   楼|编号|网名|[赞数|]内容
+//   回|编号|被回复的编号|网名|[赞数|]内容     （赞数只在开启"热评"时才有）
+// 程序只认这几种行，其余的行（开场白、分隔线、乱入的标签）一律丢掉，所以不会再出现无意义的空格子；
+// 跟帖明确知道回复的是哪一楼，会挂在那一楼下面。
 // 如果AI没按格式写，会尝试识别旧格式（"1楼 - 某某：……"），实在认不出才退回逐行显示。
 
-// 去掉"构思"部分（AI在写正文之前的草稿，读者不需要看到）和零散的标签
+// 去掉"构思"部分（AI在写正文之前的草稿，读者不需要看到）
 function stripPlanBlock(rawText) {
     let t = String(rawText ?? '');
     t = t.replace(/<构思>[\s\S]*?<\/构思>/g, '');
@@ -745,25 +877,79 @@ function stripPlanBlock(rawText) {
     return t.trim();
 }
 
+// 流式输出时，最后一行可能还没写完，丢掉它，免得把半截话接到上一条评论后面
+function trimIncompleteTail(text) {
+    const s = String(text ?? '');
+    const i = s.lastIndexOf('\n');
+    return i < 0 ? '' : s.slice(0, i);
+}
+
 const RE_MAIN = /^(?:【主贴】|\[主贴\]|主贴)\s*([\s\S]*)$/;
-const RE_FLOOR = /^(?:主?楼)\s*[|｜]\s*(\d+)\s*[|｜]\s*([^|｜]+?)\s*[|｜]\s*([\s\S]+)$/;
-const RE_REPLY = /^回(?:复)?\s*[|｜]\s*(\d+)\s*[|｜]\s*(\d+)\s*[|｜]\s*([^|｜]+?)\s*[|｜]\s*([\s\S]+)$/;
+const RE_FLOOR_HEAD = /^(?:主?楼)\s*[|｜]\s*([\s\S]+)$/;
+const RE_REPLY_HEAD = /^回(?:复)?\s*[|｜]\s*([\s\S]+)$/;
 const RE_LEGACY = /^(\d+)\s*楼\s*[-–—－]?\s*(.+?)\s*(?:回复\s*(\d+)\s*楼\s*)?[:：]\s*([\s\S]+)$/;
 const LEGACY_REPLY_MARK = /^[└╰↳→>＞»]+/;
 
+function parseLikes(str) {
+    const m = String(str ?? '').trim().match(/^(\d+(?:\.\d+)?)\s*([万wWkK]?)$/);
+    if (!m) return null;
+    let n = parseFloat(m[1]);
+    if (m[2] === '万' || m[2] === 'w' || m[2] === 'W') n *= 10000;
+    else if (m[2] === 'k' || m[2] === 'K') n *= 1000;
+    return Math.round(n);
+}
+
+function formatLikes(n) {
+    if (!Number.isFinite(n)) return '';
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+    return String(n);
+}
+
+// 解析 "编号|网名|[赞数|]内容" 这一段（楼）或 "编号|被回复编号|网名|[赞数|]内容"（回）
+function parseFloorFields(rest, isReply) {
+    const f = rest.split(/[|｜]/).map(x => x.trim());
+    const head = isReply ? 3 : 2; // 内容之前至少要有的字段数（不含赞数）
+    if (f.length < head + 1) return null;
+    if (!/^\d+$/.test(f[0])) return null;
+    if (isReply && !/^\d+$/.test(f[1])) return null;
+
+    const name = f[isReply ? 2 : 1];
+    if (!name) return null;
+    let likes = null;
+    let contentParts = f.slice(head);
+    if (contentParts.length >= 2) {
+        const parsed = parseLikes(contentParts[0]);
+        if (parsed !== null && contentParts.slice(1).join('|').trim()) {
+            likes = parsed;
+            contentParts = contentParts.slice(1);
+        }
+    }
+    const content = contentParts.join('|').trim();
+    if (!content) return null;
+    return {
+        num: Number(f[0]),
+        replyTo: isReply ? Number(f[1]) : null,
+        name,
+        likes,
+        content,
+    };
+}
+
 function parseForumText(text) {
-    const result = { mainPost: null, roots: [], count: 0 };
+    const result = { mainPost: null, roots: [], flat: [], count: 0 };
     const byNum = new Map();
     let last = null;
     let lastRoot = null;
 
     function addItem(item) {
-        let target = null;
+        item.children = [];
+        item.target = null;
         if (item.kind === 'reply') {
-            target = item.replyTo != null ? byNum.get(item.replyTo) : null;
+            const target = item.replyTo != null ? byNum.get(item.replyTo) : null;
             const root = target ? target.root : lastRoot;
             if (root) {
                 item.root = root;
+                item.target = target || root;
                 item.replyToName = target && target !== root ? target.name : '';
                 root.children.push(item);
             } else {
@@ -772,11 +958,11 @@ function parseForumText(text) {
         }
         if (item.kind === 'floor') {
             item.root = item;
-            item.children = [];
             result.roots.push(item);
             lastRoot = item;
         }
         if (Number.isFinite(item.num) && !byNum.has(item.num)) byNum.set(item.num, item);
+        result.flat.push(item);
         result.count++;
         last = item;
     }
@@ -801,16 +987,16 @@ function parseForumText(text) {
             continue;
         }
 
-        m = lead.match(RE_REPLY);
+        m = lead.match(RE_REPLY_HEAD);
         if (m) {
-            addItem({ kind: 'reply', num: Number(m[1]), replyTo: Number(m[2]), name: m[3].trim(), content: m[4].trim() });
-            continue;
+            const f = parseFloorFields(m[1], true);
+            if (f) { addItem({ kind: 'reply', ...f }); continue; }
         }
 
-        m = lead.match(RE_FLOOR);
+        m = lead.match(RE_FLOOR_HEAD);
         if (m) {
-            addItem({ kind: 'floor', num: Number(m[1]), replyTo: null, name: m[2].trim(), content: m[3].trim() });
-            continue;
+            const f = parseFloorFields(m[1], false);
+            if (f) { addItem({ kind: 'floor', ...f }); continue; }
         }
 
         const legacyText = lead.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
@@ -822,6 +1008,7 @@ function parseForumText(text) {
                 num: Number(m[1]),
                 replyTo: m[3] != null ? Number(m[3]) : null,
                 name: m[2].trim(),
+                likes: null,
                 content: m[4].trim(),
             });
             continue;
@@ -834,6 +1021,31 @@ function parseForumText(text) {
         if (last) last.content += '\n' + lead;
     }
     return result;
+}
+
+// 网名是否就是主角（网名后面如果带括号标注，括号前面的部分才算）
+function isProtagonistName(name, protagonist) {
+    if (!protagonist) return false;
+    const base = String(name ?? '').replace(/[（(].*$/, '').trim();
+    return base === protagonist;
+}
+
+// 没开"主角参与"时的保险：就算AI不听话把主角写进来了，也在显示时直接去掉
+function dropProtagonist(parsed, protagonist) {
+    if (!protagonist) return parsed;
+    const keptRoots = [];
+    const flat = [];
+    for (const root of parsed.roots) {
+        if (isProtagonistName(root.name, protagonist)) continue;
+        root.children = root.children.filter(c => !isProtagonistName(c.name, protagonist));
+        keptRoots.push(root);
+        flat.push(root, ...root.children);
+    }
+    // 保持原来的出现顺序
+    const keptSet = new Set(flat);
+    const orderedFlat = parsed.flat.filter(x => keptSet.has(x));
+    const mainPost = parsed.mainPost && isProtagonistName(parsed.mainPost.name, protagonist) ? null : parsed.mainPost;
+    return { mainPost, roots: keptRoots, flat: orderedFlat, count: orderedFlat.length };
 }
 
 // 把解析结果还原成朴素文字，存进"记忆"给AI下一轮看；不带那套竖线格式，避免AI下一轮被带偏
@@ -852,7 +1064,7 @@ function forumToPlainText(parsed) {
     return lines.join('\n');
 }
 
-// 生成结果的统一清洗入口：去构思 → 解析 → 返回清洗后的文字（存历史/记忆用）
+// 生成结果的统一清洗入口：去掉"构思"草稿，只留正文（存历史/记忆用）
 function cleanForumResult(rawText) {
     return stripPlanBlock(rawText);
 }
@@ -861,19 +1073,70 @@ function floorLabel(item) {
     return Number.isFinite(item.num) ? `${item.num}楼` : '';
 }
 
+// 热评怎么选：不是随机。分数 = AI给的赞数 + 这一楼引来的跟帖数×8 + 一点点篇幅加成。
+// 也就是"AI认为受欢迎的"和"真的引发了讨论的"综合排名，取最靠前的几条置顶。
+function hotScore(root) {
+    const likes = Number.isFinite(root.likes) ? root.likes : 0;
+    return likes + root.children.length * 8 + Math.min(root.content.length, 300) / 60;
+}
+
+function pickHotRoots(roots) {
+    if (roots.length < 4) return [];
+    const n = roots.length >= 14 ? 3 : 2;
+    return roots.slice().sort((a, b) => hotScore(b) - hotScore(a)).slice(0, n);
+}
+
+function snippet(text, max) {
+    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max) + '…' : t;
+}
+
 // 把生成结果渲染成"楼层卡片"。showAdopt: 是否在每条后面加"采纳"按钮（只在同人模式下有意义）
-function renderResultInto($el, rawText, showAdopt) {
-    const text = stripPlanBlock(rawText);
-    if (!text) {
-        $el.text(/<构思>/.test(String(rawText ?? ''))
-            ? '输出在“构思”阶段就被截断了，没写到正文。请在设置里调大“最大输出长度”，或关掉“先构思再写”后重试。'
-            : '没有得到结果。');
+// opts.streaming: 流式输出中，内容还没写完——不做热评重排，末尾加"正在写"提示
+function renderResultInto($el, rawText, showAdopt, opts = {}) {
+    const settings = getSettings();
+    const streaming = !!opts.streaming;
+    const raw = String(rawText ?? '');
+
+    if (streaming && /<构思>/.test(raw) && !/<\/构思>/.test(raw)) {
+        $el.text(`🧠 正在构思……（已写 ${raw.length} 字）`);
         return;
     }
 
-    const parsed = parseForumText(text);
+    let text = stripPlanBlock(raw);
+    if (streaming) text = trimIncompleteTail(text);
+    if (!text) {
+        if (streaming) {
+            $el.text('✍️ 正在写……');
+        } else {
+            $el.text(/<构思>/.test(raw)
+                ? '输出在“构思”阶段就被截断了，没写到正文。请在设置里调大“最大输出长度”，或关掉“先构思再写”后重试。'
+                : '没有得到结果。');
+        }
+        return;
+    }
+
+    const skin = SKIN_SPECS[settings.skin] ? settings.skin : 'forum';
+    const protagonist = getProtagonistName();
+    const protagonistOn = !!settings.protagonistMode;
+    let parsed = parseForumText(text);
+    if (!protagonistOn) parsed = dropProtagonist(parsed, protagonist);
+
     const adoptSource = []; // 与 data-fo-i 下标一一对应，用于事后挂"采纳"按钮
-    let html = '<div class="future-observer-feed">';
+    let idx = 0;
+    const pushAdopt = (item) => {
+        const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
+        adoptSource[idx] = m && item.content ? { realName: m[1].trim(), content: item.content } : null;
+        return idx++;
+    };
+    const likesHtml = (item) => (Number.isFinite(item.likes)
+        ? `<span class="future-observer-likes">👍 ${escapeHtml(formatLikes(item.likes))}</span>` : '');
+    const meBadge = (item) => (protagonistOn && isProtagonistName(item.name, protagonist)
+        ? '<span class="future-observer-chip future-observer-chip-small">主角</span>' : '');
+    const meClass = (item) => (protagonistOn && isProtagonistName(item.name, protagonist)
+        ? ' is-protagonist' : '');
+
+    let html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
 
     if (parsed.count === 0 && !parsed.mainPost) {
         // 完全认不出格式：退回逐行显示（过滤掉空行和纯符号行）
@@ -893,40 +1156,67 @@ function renderResultInto($el, rawText, showAdopt) {
                 + `</div><div class="future-observer-text">${escapeHtml(mp.content)}</div></div>`;
         }
 
-        let idx = 0;
-        const pushAdopt = (item) => {
-            const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
-            adoptSource[idx] = m && item.content
-                ? { realName: m[1].trim(), content: item.content }
-                : null;
-            return idx++;
-        };
-
-        for (const root of parsed.roots) {
-            const i = pushAdopt(root);
-            html += '<div class="future-observer-floor">'
-                + `<div class="future-observer-floor-head"><span class="future-observer-name">${escapeHtml(root.name)}</span>`
-                + `<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
-                + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
-                + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
-
-            if (root.children.length) {
-                html += '<div class="future-observer-replies">';
-                for (const child of root.children) {
-                    const j = pushAdopt(child);
-                    html += '<div class="future-observer-reply">'
-                        + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>`
-                        + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
-                        + `<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
-                        + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
-                        + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
-                }
-                html += '</div>';
+        if (skin === 'chat') {
+            for (const item of parsed.flat) {
+                const i = pushAdopt(item);
+                html += `<div class="future-observer-msg${meClass(item)}">`
+                    + `<div class="future-observer-msg-name">${escapeHtml(item.name)}${meBadge(item)}</div>`
+                    + '<div class="future-observer-bubble">'
+                    + (item.kind === 'reply' && item.target
+                        ? `<div class="future-observer-quote">↩ ${escapeHtml(item.target.name)}：${escapeHtml(snippet(item.target.content, 24))}</div>` : '')
+                    + `<div class="future-observer-text">${escapeHtml(item.content)}</div></div>`
+                    + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
             }
-            html += '</div>';
+        } else if (skin === 'danmaku') {
+            for (const item of parsed.flat) {
+                const i = pushAdopt(item);
+                html += `<div class="future-observer-danmaku-item${meClass(item)}">`
+                    + `<span class="future-observer-danmaku-text">${escapeHtml(item.content)}</span>`
+                    + `<span class="future-observer-danmaku-name">${escapeHtml(item.name)}</span>`
+                    + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+            }
+        } else {
+            // 论坛楼层 / 新闻评论区：树形结构，跟帖挂在被回复的楼下面
+            const renderRoot = (root, hot) => {
+                const i = pushAdopt(root);
+                let h = `<div class="future-observer-floor${hot ? ' is-hot' : ''}${meClass(root)}">`
+                    + '<div class="future-observer-floor-head">'
+                    + (hot ? '<span class="future-observer-hot-badge">🔥</span>' : '')
+                    + `<span class="future-observer-name">${escapeHtml(root.name)}</span>${meBadge(root)}`
+                    + `${likesHtml(root)}<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
+                    + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
+                    + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
+                if (root.children.length) {
+                    h += '<div class="future-observer-replies">';
+                    for (const child of root.children) {
+                        const j = pushAdopt(child);
+                        h += `<div class="future-observer-reply${meClass(child)}">`
+                            + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>${meBadge(child)}`
+                            + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
+                            + `${likesHtml(child)}<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
+                            + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
+                            + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
+                    }
+                    h += '</div>';
+                }
+                return h + '</div>';
+            };
+
+            const useHot = !streaming && !!settings.hotComments && SKIN_SPECS[skin].hotAllowed;
+            const hotRoots = useHot ? pickHotRoots(parsed.roots) : [];
+            if (hotRoots.length) {
+                const hotSet = new Set(hotRoots);
+                html += '<div class="future-observer-group-title">🔥 热评</div>';
+                for (const root of hotRoots) html += renderRoot(root, true);
+                html += '<div class="future-observer-group-title">全部评论</div>';
+                for (const root of parsed.roots) if (!hotSet.has(root)) html += renderRoot(root, false);
+            } else {
+                for (const root of parsed.roots) html += renderRoot(root, false);
+            }
         }
     }
 
+    if (streaming) html += '<div class="future-observer-streaming">✍️ 正在写……</div>';
     html += '</div>';
     $el.html(html);
 
@@ -973,42 +1263,136 @@ function showHistoryAt(scopeKey, idx) {
     refreshHistoryNav();
 }
 
-async function generateObservation() {
-    // 用 class 选择器，设置抽屉里的结果框和悬浮球弹窗里的结果框会同时更新，天然保持同步
-    const resultBoxes = $('.future-observer-result');
-    const buttons = $('.future-observer-generate-btn');
+// 当前正在进行的一次生成（同一时间只允许一次）；取消按钮靠它找到要中断的东西
+let currentRun = null;
+const CANCELLED = Symbol('cancelled');
 
+function setRunningUI(running) {
+    $('.future-observer-generate-btn').prop('disabled', running).text(running ? '观测中…' : '🔭 生成评论区');
+    $('.future-observer-cancel-btn').toggle(running);
+}
+
+// 取消 = 停止并保留已经写好的部分（只有自定义API的流式输出才有"已写好的部分"）
+function cancelGeneration() {
+    const run = currentRun;
+    if (!run || run.cancelled) return;
+    run.cancelled = true;
+    try { run.abort.abort(); } catch { /* 忽略 */ }
+    if (!run.useCustomApi) {
+        try { getContext().stopGeneration?.(); } catch { /* 酒馆版本不支持就算了 */ }
+    }
+    run.resolveCancel?.();
+}
+
+// 流式输出时，节流刷新界面（太频繁地重建DOM会卡，尤其是手机）
+function scheduleStreamRender(run) {
+    if (run.renderTimer || run.finished) return;
+    run.renderTimer = setTimeout(() => {
+        run.renderTimer = null;
+        if (currentRun !== run || run.finished) return;
+        $('.future-observer-result').each(function () {
+            const box = this;
+            const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+            renderResultInto($(box), run.partial, false, { streaming: true });
+            if (nearBottom && $(box).hasClass('future-observer-popup-result')) {
+                box.scrollTop = box.scrollHeight;
+            }
+        });
+    }, 150);
+}
+
+async function generateObservation() {
+    if (currentRun) return; // 已经在生成了，忽略重复点击
+
+    const resultBoxes = $('.future-observer-result');
     const story = getRecentChat();
     if (!story) {
         toastr.warning('当前聊天没有可观测的剧情。');
         return;
     }
 
+    const settings = getSettings();
+    const run = {
+        cancelled: false,
+        abort: new AbortController(),
+        useCustomApi: !!settings.customApi?.enabled,
+        partial: '',
+        renderTimer: null,
+        resolveCancel: null,
+    };
+    currentRun = run;
+
     setOptionsOpen(false); // 一点生成就把选项折叠起来，把空间让给评论区
-    buttons.prop('disabled', true).text('观测中…');
+    setRunningUI(true);
     resultBoxes.text('🔭 正在观察……');
 
     try {
-        const settings = getSettings();
-        const prompt = await buildPrompt(story);
-        let result;
+        const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
+        const maxTokens = Number(settings.maxOutputTokens) || 0;
+        let result = '';
+        let failed = false;
 
-        if (settings.customApi?.enabled) {
-            result = await callCustomApi(prompt, settings.customApi, Number(settings.maxOutputTokens) || 0);
-        } else {
-            const ctx = getContext();
-            let generateQuietPrompt = ctx.generateQuietPrompt;
-            if (typeof generateQuietPrompt !== 'function') {
-                ({ generateQuietPrompt } = await import('../../../../script.js'));
+        try {
+            const prompt = await buildPrompt(story);
+            if (run.cancelled) throw new Error('cancelled');
+
+            if (run.useCustomApi) {
+                result = await callCustomApi(prompt, settings.customApi, maxTokens, {
+                    signal: run.abort.signal,
+                    onChunk: (text) => {
+                        run.partial = text;
+                        scheduleStreamRender(run);
+                    },
+                });
+            } else {
+                const ctx = getContext();
+                let generateQuietPrompt = ctx.generateQuietPrompt;
+                if (typeof generateQuietPrompt !== 'function') {
+                    ({ generateQuietPrompt } = await import('../../../../script.js'));
+                }
+                const cancelled = new Promise((resolve) => { run.resolveCancel = () => resolve(CANCELLED); });
+                const main = generateQuietPrompt({
+                    quietPrompt: prompt,
+                    quietToLoud: false,
+                    ...(maxTokens > 0 ? { responseLength: maxTokens } : {}),
+                });
+                main.catch(() => { /* 取消后酒馆那边可能还会报错，这里不管 */ });
+                result = await Promise.race([main, cancelled]);
+                if (result === CANCELLED) result = '';
             }
-            result = await generateQuietPrompt({
-                quietPrompt: prompt,
-                quietToLoud: false,
-                ...(Number(settings.maxOutputTokens) > 0 ? { responseLength: Number(settings.maxOutputTokens) } : {}),
-            });
+        } catch (error) {
+            if (run.cancelled) {
+                result = run.partial || '';
+            } else {
+                failed = true;
+                console.error('[观察者论坛]', error);
+                let msg = error?.message || String(error);
+                if (error instanceof TypeError) {
+                    msg += '（可能是网络问题，或者对方接口不支持浏览器直连的跨域访问 CORS，请检查端点地址是否正确）';
+                }
+                resultBoxes.text(`生成失败：${msg}`);
+                toastr.error('观测生成失败，请打开控制台查看错误。');
+            }
         }
 
-        const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
+        if (failed) return;
+
+        // 流式阶段到此结束：停掉还没触发的刷新，免得它盖掉下面的最终渲染
+        run.finished = true;
+        if (run.renderTimer) { clearTimeout(run.renderTimer); run.renderTimer = null; }
+
+        if (run.cancelled) {
+            // 取消：能保留多少保留多少（最后一行可能只写了一半，丢掉）
+            const partial = cleanForumResult(trimIncompleteTail(result || run.partial));
+            const parsedPartial = parseForumText(partial);
+            if (!parsedPartial.count && !parsedPartial.mainPost) {
+                resultBoxes.text('已取消。');
+                return;
+            }
+            result = partial;
+            toastr.info('已停止，保留了已经写好的部分。', '观察者论坛');
+        }
+
         const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
             renderResultInto($(this), result, showAdopt);
@@ -1029,16 +1413,10 @@ async function generateObservation() {
             const parsed = parseForumText(cleaned);
             await saveMemoryEntry(scopeKey, parsed.count ? forumToPlainText(parsed) : cleaned);
         }
-    } catch (error) {
-        console.error('[观察者论坛]', error);
-        let msg = error?.message || String(error);
-        if (error instanceof TypeError) {
-            msg += '（可能是网络问题，或者对方接口不支持浏览器直连的跨域访问 CORS，请检查端点地址是否正确）';
-        }
-        resultBoxes.text(`生成失败：${msg}`);
-        toastr.error('观测生成失败，请打开控制台查看错误。');
     } finally {
-        buttons.prop('disabled', false).text('🔭 生成评论区');
+        if (run.renderTimer) clearTimeout(run.renderTimer);
+        currentRun = null;
+        setRunningUI(false);
     }
 }
 
@@ -1106,6 +1484,10 @@ function syncControlsFromSettings() {
     });
     $('.future-observer-richness-select').val(RICHNESS_SPECS[settings.richness] ? settings.richness : 'rich');
     $('.future-observer-plan-toggle').prop('checked', settings.planFirst !== false);
+    $('.future-observer-skin-select').val(SKIN_SPECS[settings.skin] ? settings.skin : 'forum');
+    $('.future-observer-hot-toggle').prop('checked', !!settings.hotComments).prop('disabled', !getSkinSpec(settings).hotAllowed);
+    $('.future-observer-protagonist-toggle').prop('checked', !!settings.protagonistMode);
+    $('.future-observer-protagonist-name').val(settings.protagonistName || '').toggle(!!settings.protagonistMode);
     $('#future-observer-maxtokens').val(Number(settings.maxOutputTokens) || 0);
     applyPopupTheme();
     refreshHistoryNav();
@@ -1196,6 +1578,35 @@ function bindSharedControls() {
         saveSettings();
         syncControlsFromSettings();
     });
+
+    $(document).off('change.futureObserverSkin').on('change.futureObserverSkin', '.future-observer-skin-select', function () {
+        const settings = getSettings();
+        settings.skin = String($(this).val());
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverHot').on('change.futureObserverHot', '.future-observer-hot-toggle', function () {
+        const settings = getSettings();
+        settings.hotComments = $(this).is(':checked');
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverProtagonist').on('change.futureObserverProtagonist', '.future-observer-protagonist-toggle', function () {
+        const settings = getSettings();
+        settings.protagonistMode = $(this).is(':checked');
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverProtagonistName').on('change.futureObserverProtagonistName', '.future-observer-protagonist-name', function () {
+        const settings = getSettings();
+        settings.protagonistName = String($(this).val() || '').trim();
+        saveSettings();
+    });
+
+    $(document).off('click.futureObserverCancel').on('click.futureObserverCancel', '.future-observer-cancel-btn', cancelGeneration);
 
     $(document).off('change.futureObserverPlan').on('change.futureObserverPlan', '.future-observer-plan-toggle', function () {
         const settings = getSettings();
@@ -1397,6 +1808,18 @@ function buildFloatingUI() {
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（更充实，更慢）</label>
                 <div class="future-observer-popup-selectrow">
+                    <span>载体</span>
+                    <select class="future-observer-skin-select">
+                        <option value="forum">论坛楼层</option>
+                        <option value="news">新闻评论区</option>
+                        <option value="chat">群聊</option>
+                        <option value="danmaku">弹幕</option>
+                    </select>
+                </div>
+                <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-hot-toggle"> 热评（标赞数，热门的置顶；仅论坛/新闻载体）</label>
+                <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-protagonist-toggle"> 主角参与讨论（不勾选则主角不会出现）</label>
+                <input type="text" class="future-observer-protagonist-name" placeholder="主角名（留空=你的用户名）" style="display:none;">
+                <div class="future-observer-popup-selectrow">
                     <span>内容量</span>
                     <select class="future-observer-richness-select">
                         <option value="brief">精简</option>
@@ -1415,6 +1838,7 @@ function buildFloatingUI() {
             <div class="future-observer-result future-observer-popup-result">点击下方“生成评论区”查看。</div>
             <div class="future-observer-popup-footer">
                 <button type="button" class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
+                <button type="button" class="menu_button future-observer-cancel-btn" style="display:none;" title="停止生成，保留已经写好的部分">⏹ 停止</button>
             </div>
         </div>
     `);
@@ -1512,7 +1936,12 @@ function renderOptionChips() {
         chips.push(work ? `《${work}》` : '作品随机');
         if (settings.fandomSameWorld) chips.push('同一世界');
     }
+    if (settings.skin && settings.skin !== 'forum') {
+        chips.push((SKIN_OPTIONS.find(o => o.value === settings.skin) || { label: settings.skin }).label);
+    }
     if (settings.weiboMode) chips.push('微博体');
+    if (settings.hotComments && getSkinSpec(settings).hotAllowed) chips.push('热评');
+    if (settings.protagonistMode) chips.push('主角参与');
     if (settings.memoryEnabled) chips.push('记忆');
     const richLabel = (RICHNESS_OPTIONS.find(o => o.value === settings.richness) || RICHNESS_OPTIONS[2]).label;
     chips.push(`内容·${richLabel}`);

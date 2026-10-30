@@ -16,7 +16,7 @@
                 <label><input type="checkbox" id="future-observer-aionly-toggle"> 只读取AI角色的发言（不含我自己发送的消息）</label>
             </div>
             <div class="future-observer-row">
-                <label><input type="checkbox" id="future-observer-stripoptions-toggle"> 忽略每楼末尾的 &lt;action&gt; 选项区（预设生成的待选项，不当作已发生的剧情）</label>
+                <label><input type="checkbox" id="future-observer-stripoptions-toggle"> 忽略每楼里的 &lt;action&gt; 选项区和 &lt;summary&gt; 摘要（不是剧情本身，不让评论者看到）</label>
             </div>
             <div class="future-observer-row">
                 <label>时间方向</label>
@@ -41,6 +41,22 @@
             </div>
             <div class="future-observer-hint">
                 最大输出长度填 0 表示不指定。想要内容更充实，建议填 8000 左右；填太大可能被某些模型/接口拒绝，报错的话改小即可。
+            </div>
+            <div class="future-observer-row">
+                <label>载体</label>
+                <select class="future-observer-skin-select">
+                    <option value="forum">论坛楼层</option>
+                    <option value="news">新闻评论区</option>
+                    <option value="chat">群聊</option>
+                    <option value="danmaku">弹幕</option>
+                </select>
+            </div>
+            <div class="future-observer-row">
+                <label><input type="checkbox" class="future-observer-hot-toggle"> 热评（给评论标赞数，热门的置顶；仅论坛/新闻载体有效）</label>
+            </div>
+            <div class="future-observer-row">
+                <label><input type="checkbox" class="future-observer-protagonist-toggle"> 主角参与讨论（不勾选则主角不会出现在评论里）</label>
+                <input type="text" class="future-observer-protagonist-name" placeholder="主角名（留空=你的用户名）" style="display:none;">
             </div>
             <div class="future-observer-row">
                 <label><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（让AI先列思路再写正文，更充实、更不雷同，但更慢更费字数；构思部分会被自动删掉）</label>
@@ -80,6 +96,7 @@
 
             <div class="future-observer-action">
                 <button id="future-observer-generate" class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
+                <button id="future-observer-cancel" class="menu_button future-observer-cancel-btn" style="display:none;" title="停止生成，保留已经写好的部分">⏹ 停止</button>
             </div>
             <details class="future-observer-result-details">
                 <summary>▶ 观测评论</summary>

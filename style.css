@@ -359,6 +359,8 @@
     scrollbar-width:thin;
 }
 .future-observer-popup-footer{
+    display:flex;
+    gap:8px;
     flex-shrink:0;
     padding:10px 14px 12px;
     border-top:1px solid rgba(255,255,255,.07);
@@ -366,7 +368,8 @@
 }
 .future-observer-popup-footer .future-observer-generate-btn{
     display:block;
-    width:100%;
+    flex:1 1 auto;
+    min-width:0;
     margin:0;
     padding:11px 0;
     border-radius:12px;
@@ -389,6 +392,136 @@
     max-height:86vh;
 }
 
+/* 停止按钮 */
+.future-observer-popup-footer .future-observer-cancel-btn{
+    flex:0 0 auto;
+    margin:0;
+    padding:11px 16px;
+    border-radius:12px;
+    font-size:14px;
+    color:inherit;
+    background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.18);
+    cursor:pointer;
+    white-space:nowrap;
+}
+.future-observer-cancel-btn{margin-left:8px}
+.future-observer-popup-footer .future-observer-cancel-btn{margin-left:0}
+
+/* 主角名输入框 */
+.future-observer-protagonist-name{width:100%;max-width:none}
+
+/* ==================== 热评 / 赞数 / 主角标记 ==================== */
+.future-observer-likes{
+    font-size:.78em;
+    opacity:.6;
+    white-space:nowrap;
+    font-variant-numeric:tabular-nums;
+}
+.future-observer-hot-badge{font-size:.9em}
+.future-observer-group-title{
+    font-size:.78em;
+    font-weight:700;
+    letter-spacing:.1em;
+    opacity:.55;
+    margin:4px 2px 0;
+}
+.future-observer-floor.is-hot{
+    border-color:rgba(var(--fo-accent),.5);
+    background:linear-gradient(140deg, rgba(var(--fo-accent),.14), rgba(127,127,127,.07));
+}
+.future-observer-chip-small{
+    font-size:.66em;
+    padding:0 7px;
+    margin-left:2px;
+    align-self:center;
+}
+.future-observer-floor.is-protagonist,
+.future-observer-msg.is-protagonist .future-observer-bubble{
+    border-color:rgba(var(--fo-accent),.55);
+    box-shadow:inset 3px 0 0 rgb(var(--fo-accent));
+}
+.future-observer-reply.is-protagonist{box-shadow:inset 3px 0 0 rgb(var(--fo-accent));padding-left:8px}
+
+/* 流式输出时末尾的提示 */
+.future-observer-streaming{
+    font-size:.82em;
+    opacity:.55;
+    padding:2px 4px;
+    animation:future-observer-pulse 1.4s ease-in-out infinite;
+}
+@keyframes future-observer-pulse{0%,100%{opacity:.25}50%{opacity:.7}}
+
+/* ==================== 载体：新闻评论区 ==================== */
+.future-observer-skin-news{gap:0}
+.future-observer-skin-news .future-observer-floor{
+    background:transparent;
+    border:none;
+    border-bottom:1px solid rgba(127,127,127,.2);
+    border-radius:0;
+    padding:12px 2px;
+}
+.future-observer-skin-news .future-observer-floor.is-hot{
+    background:rgba(var(--fo-accent),.08);
+    border-radius:10px;
+    padding:12px 10px;
+    margin:2px 0;
+}
+.future-observer-skin-news .future-observer-name{color:inherit;opacity:.9}
+.future-observer-skin-news .future-observer-replies{
+    background:rgba(127,127,127,.09);
+    border-left:none;
+    border-radius:8px;
+}
+
+/* ==================== 载体：群聊 ==================== */
+.future-observer-skin-chat{gap:10px}
+.future-observer-msg{display:flex;flex-direction:column;align-items:flex-start;max-width:88%}
+.future-observer-msg-name{
+    font-size:.78em;
+    font-weight:600;
+    margin:0 4px 3px;
+    color:rgb(var(--fo-accent));
+    display:flex;
+    align-items:center;
+    gap:5px;
+}
+.future-observer-bubble{
+    padding:8px 12px;
+    border-radius:4px 14px 14px 14px;
+    background:rgba(127,127,127,.16);
+    border:1px solid rgba(127,127,127,.12);
+}
+.future-observer-bubble .future-observer-text{font-size:.93em;line-height:1.6}
+.future-observer-quote{
+    font-size:.78em;
+    opacity:.65;
+    margin-bottom:5px;
+    padding:3px 8px;
+    border-left:2px solid rgba(var(--fo-accent),.6);
+    background:rgba(0,0,0,.12);
+    border-radius:0 6px 6px 0;
+}
+
+/* ==================== 载体：弹幕 ==================== */
+.future-observer-skin-danmaku{flex-direction:row;flex-wrap:wrap;gap:7px;align-items:flex-start}
+.future-observer-danmaku-item{
+    display:inline-flex;
+    align-items:baseline;
+    gap:6px;
+    max-width:100%;
+    padding:5px 12px;
+    border-radius:999px;
+    background:rgba(var(--fo-accent),.13);
+    border:1px solid rgba(var(--fo-accent),.28);
+}
+.future-observer-danmaku-item:nth-child(3n+2){background:rgba(127,127,127,.14);border-color:rgba(127,127,127,.25)}
+.future-observer-danmaku-item:nth-child(5n){background:rgba(var(--fo-accent),.24)}
+.future-observer-danmaku-item.is-protagonist{box-shadow:0 0 0 2px rgba(var(--fo-accent),.7)}
+.future-observer-danmaku-text{font-size:.92em;line-height:1.5;overflow-wrap:anywhere}
+.future-observer-danmaku-name{font-size:.7em;opacity:.45;white-space:nowrap}
+.future-observer-skin-danmaku .future-observer-actions{display:inline;margin:0}
+
 /* ==================== 手机：弹窗变成铺满屏幕的底部抽屉 ==================== */
 @media (max-width: 640px){
     .future-observer-popup,
@@ -410,3 +543,5 @@
     .future-observer-popup-footer{padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
     .future-observer-optionspanel{max-height:38dvh}
 }
+.future-observer-skin-danmaku .future-observer-mainpost,
+.future-observer-skin-danmaku .future-observer-streaming{flex:1 1 100%}
