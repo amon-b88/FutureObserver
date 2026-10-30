@@ -24,6 +24,9 @@ const DEFAULT_SETTINGS = Object.freeze({
     aiOnly: false,
     stripOptions: true, // 读取聊天时，自动删掉每楼末尾的 <action>…</action> 选项区（预设生成的待选项，不是已发生的剧情）
     maxChars: 14000,
+    richness: 'rich', // 内容量：'brief' | 'normal' | 'rich' | 'epic'
+    planFirst: true, // 先构思再写正文（更充实，更耗时；构思部分会被自动删掉）
+    maxOutputTokens: 0, // 最大输出长度，0=不指定（用接口/酒馆自己的默认值）
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
@@ -138,9 +141,9 @@ function buildFandomIdentityText(work, isSameWorld) {
         : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色，这种情况下角色之间不需要有原作关系，正常当作互不相干的路人网友处理即可。';
 
     const base = `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
-评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，格式例如：
-1楼 - 疾风影帝（漩涡鸣人）：这忍术用得也太糙了吧……
-3楼 - 桃芝丽庄园主（罗宾）：有点意思，这段历史我要记下来。
+评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，网名部分的写法例如：
+楼|1|疾风影帝（漩涡鸣人）|这忍术用得也太糙了吧……
+楼|3|桃芝丽庄园主（罗宾）|有点意思，这段历史我要记下来。
 这条"网名+括号真名"的格式规则，只在这个同人模式下使用。
 如果某位评论者提到"要来帮忙""要送/给点什么"这类实际行动，所提供的帮助/物品力度要匹配这个角色在原作里真实的身份地位和能力等级（比如战力顶尖的强者，就不该随口说要送一把普通铁剑这种不符身份的东西），同时也要考虑别让这类帮助严重打破当前故事本身的剧情节奏和强度平衡。`;
 
@@ -339,18 +342,77 @@ function getRecentChat() {
     return result;
 }
 
-// 每次生成时随机抽一组"楼层数量/每条字数"的范围，让每次结果的热闹程度和详细程度都有变化，
-// 不再是固定死的"6~8条/20~80字"。
-function pickRandomLengthSpec() {
-    const countOptions = [
-        [7, 10], [8, 12], [10, 14], [9, 13], [11, 16],
-    ];
-    const lengthOptions = [
-        [40, 90], [60, 120], [80, 150], [50, 100], [100, 180],
-    ];
-    const [countMin, countMax] = countOptions[Math.floor(Math.random() * countOptions.length)];
-    const [lenMin, lenMax] = lengthOptions[Math.floor(Math.random() * lengthOptions.length)];
-    return { countMin, countMax, lenMin, lenMax };
+// ==================== 内容量 + 随机素材 ====================
+// 内容量四档：决定一次生成多少楼、跟帖多少条、每条写多长。
+// 另外，每次生成时由代码随机抽几个"讨论焦点"和"说话风格"塞进提示词——
+// 这样每次的论坛都会往不同方向发展，而不是同一套八股模板反复出现。
+const RICHNESS_OPTIONS = [
+    { value: 'brief', label: '精简' },
+    { value: 'normal', label: '标准' },
+    { value: 'rich', label: '丰富' },
+    { value: 'epic', label: '长篇' },
+];
+
+const RICHNESS_SPECS = {
+    brief: {
+        floors: [7, 10], replies: [2, 4], personas: [6, 8], angles: 3,
+        lengthText: '约三成是一两句话的短评（20～50字），约五成是中等长度（60～110字），约两成是认真展开的长评（120～200字）',
+    },
+    normal: {
+        floors: [10, 14], replies: [4, 7], personas: [8, 10], angles: 4,
+        lengthText: '约三成是一两句话的短评（20～50字），约四成是中等长度（70～130字），约三成是认真展开的长评（150～260字，有具体论证、细节、前因后果）',
+    },
+    rich: {
+        floors: [14, 20], replies: [6, 10], personas: [10, 14], angles: 5,
+        lengthText: '约两成是一两句话的短评（20～50字），约四成是中等长度（80～160字），约四成是认真展开的长评（200～350字，有具体论证、细节、前因后果，甚至带一个小故事或亲身经历）',
+    },
+    epic: {
+        floors: [20, 28], replies: [10, 16], personas: [14, 20], angles: 6,
+        lengthText: '约两成是一两句话的短评（20～60字），约三成是中等长度（100～200字），约五成是充分展开的长评（250～450字，有层层递进的论证、具体细节、前因后果，甚至带一个小故事或亲身经历）',
+    },
+};
+
+const DISCUSSION_ANGLES = [
+    '有人抓住一个很小、很具体的细节（一个称呼、一件物品、一句台词、一个数字），大做文章、过度解读。',
+    '对同一个人物的动机，出现两种截然相反的解读，并且为此吵了起来。',
+    '有人提出一个站不住脚但很有意思的脑补/阴谋论，被别人逐条拆台。',
+    '有人用自己的生活经验、职业或专业知识来类比这件事（要写出具体细节，不要泛泛而谈）。',
+    '有人跑题，聊到完全不相干的事上，结果把一整条楼带歪了。',
+    '有人专门抬杠、揪字眼，纠结某个用词或前后细节，被别人嫌烦。',
+    '有人认真复盘事件的前因后果，梳理时间线或因果链，并给出一个有风险的预测。',
+    '有人情绪上头，语无伦次、反复追问、连发几个问号。',
+    '有人吐槽剧情里某个不合理、反常或尴尬的地方，并且说得很具体。',
+    '有人转述一个道听途说的传闻或小道消息（要明确标出是传闻，不当作事实）。',
+    '有人旗帜鲜明地护着某个角色，护短护得有点夸张，惹来别人调侃。',
+    '有人发现了一个别人都没注意到的细节或前后矛盾，引发一阵惊叹或质疑。',
+    '有人提出一个很现实、很务实的问题（比如代价、后勤、后果、谁来善后），把气氛从热闹拉回现实。',
+];
+
+const VOICE_STYLES = [
+    '话痨型：句子长，爱铺垫，爱用括号补充说明',
+    '极简型：一两句话就收，言简意赅，甚至有点冲',
+    '段子手型：爱用比喻、夸张和梗，笑点来自具体细节',
+    '严谨型：条理清晰，爱分点、讲逻辑，但也有自己的偏见',
+    '阴阳怪气型：话里有话，明捧暗踩',
+    '热心科普型：忍不住解释背景、补充知识',
+    '冲浪型：满嘴网络用语、缩写、口头禅，说话跳跃',
+    '过来人型：老气横秋，爱讲"当年""我跟你们说"',
+    '单纯路人型：看不太懂但很想参与，爱提问',
+    '感性型：容易共情，会代入某个人物的处境',
+    '杠精型：为反对而反对，但偶尔能说到点子上',
+];
+
+function pickRandom(list, n) {
+    const copy = list.slice();
+    for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy.slice(0, Math.max(0, Math.min(n, copy.length)));
+}
+
+function getRichnessSpec(settings) {
+    return RICHNESS_SPECS[settings.richness] || RICHNESS_SPECS.rich;
 }
 
 // 读取当前聊天关键词命中的世界书内容（不是整本世界书，是酒馆按关键词触发出来的那部分）。
@@ -383,7 +445,12 @@ async function getWorldInfoText() {
 async function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
-    const { countMin, countMax, lenMin, lenMax } = pickRandomLengthSpec();
+    const spec = getRichnessSpec(settings);
+    const [floorMin, floorMax] = spec.floors;
+    const [replyMin, replyMax] = spec.replies;
+    const [personaMin, personaMax] = spec.personas;
+    const angles = pickRandom(DISCUSSION_ANGLES, spec.angles);
+    const voices = pickRandom(VOICE_STYLES, 5);
 
     let identityText;
     if (direction === 'otherworld' && settings.identity === 'fandom') {
@@ -402,8 +469,8 @@ async function buildPrompt(story) {
 
 【微博体规则】
 - 先由评论者里的某一位发一条抓眼球的"主贴"，标题党风格（比如"讨论……""震惊……""只有我觉得……"这种开头），用一两句话说出一个具体、有态度的观点或角度，而不是泛泛复述剧情。
-- 主贴单独一行，用下面这个固定格式标出（方便程序识别，务必照抄这个格式，不要变化）：
-【主贴】某某：只有我觉得他这波操作离谱吗？
+- 主贴单独一行，放在所有楼层之前，用下面这个固定格式（方便程序识别，务必照抄，不要变化）：
+主贴|某某|只有我觉得他这波操作离谱吗？
 - 之后所有的主楼评论和跟帖，都必须针对这条主贴提出的具体观点来回应（赞同、反驳、追问、玩梗），不要各自评论剧情里不相关的别的地方。
 - 楼层编号从主贴之后的第一条评论开始算1楼，主贴本身不算入楼层编号。` : '';
 
@@ -424,6 +491,19 @@ ${lastMemory}
         }
     }
 
+    const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
+    const voiceText = voices.map(v => `- ${v}`).join('\n');
+
+    const planBlock = settings.planFirst !== false ? `
+
+【写作步骤——分两步】
+第一步：先在 <构思> 和 </构思> 两个标签之间做构思。这部分程序会自动删掉、读者看不到，所以请认真、详细地写，不必简洁，也不必遵守下面的输出格式：
+  1. 把剧情里值得被讨论的具体事件、细节、矛盾点、反常之处、尴尬之处列出来（至少8条）。
+  2. 设计 ${personaMin}～${personaMax} 位评论者：网名、身份、立场、说话习惯、他最在意的点。要彼此差异明显，包括立场对立的人。
+  3. 规划几条会吵起来的争论线、几个有意思的跑题/玩梗/脑补点，以及楼中楼里谁会接谁的话。
+  4. 核对上面"本次讨论焦点"是否都已经安排进去了。
+第二步：构思结束后，紧接着输出论坛正文，严格使用下面的输出格式。` : '';
+
     return `你是"观察者论坛"。
 
 【时间背景】
@@ -440,19 +520,41 @@ ${identityText}
 3. 不得把评论中的推测当成事实，也不得凭空补充关键剧情。
 4. 可以出现误解、争论、玩梗、不同立场；评论者可以理解错，但不要让所有人都同一种看法。
 5. 评论重点放在这段剧情中真正发生的事件、人物行为和结果。
-6. 生成 ${countMin}～${countMax} 条主楼评论，每条约${lenMin}～${lenMax}字。
-7. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则评论者之间身份要有明显差异。
-8. 要像真实的人讨论，不要写成论文。
-9. 不要出现"作为AI""提示词""主线"等元话语。
-10. 最后不要总结，不要解释生成过程。
+6. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则评论者之间身份要有明显差异。
+7. 不要出现"作为AI""提示词""主线"等元话语。
+8. 最后不要总结，不要解释生成过程。
 
-【楼中楼规则】
-- 部分主楼（不是全部，具体几楼有回复、有没有回复，你自己判断，也可以完全没有）会引出1~2条"跟帖"回复，模拟真实论坛里热门楼层有人接话吵/附和、冷门楼层没人理的自然分布。
-- 跟帖要针对上一楼的具体内容做回应（附和、反驳、追问、玩梗），不要变成另一条无关评论。
-- 用类似下面的格式区分主楼和跟帖（楼层编号连续往下排，跟帖用缩进和"回复X楼"标出）：
-1楼 - 某某：……
-    └ 2楼 - 某某 回复1楼：……
-3楼 - 某某：……${weiboBlock}
+【数量与长度】
+- 生成 ${floorMin}～${floorMax} 条主楼评论；另外再写 ${replyMin}～${replyMax} 条楼中楼跟帖（跟帖不算在主楼数量里）。
+- 字数要有明显起伏，不要每条都差不多长：${spec.lengthText}。
+
+【质量要求——避免千篇一律】
+- 每条评论至少抓住剧情里的一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
+- 不要每条都走"先复述剧情→再表态→再总结升华"的三段式；不要用"这或许就是……""这正是……的意义"这类金句或升华来收尾；少用排比、对仗这类整齐的句子。
+- 每位评论者要有自己的说话习惯、关心的点和立场，不要所有人用同样的句式和语气。
+- 评论者之间要有互动：有人点名反驳、有人接梗、有人被带偏。热门楼层可以有 2～4 条跟帖，还可以出现跟帖回复跟帖；冷门楼层可以没人理。
+- 同一个开头词或口头禅，整个论坛里最多出现两次。
+- 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。
+
+【本次讨论焦点——由程序随机指定，务必每一条都有人谈到】
+${angleText}
+
+【本次语言风格参考——挑几种分配给不同评论者，按身份适配，不必全用】
+${voiceText}
+
+【输出格式——必须严格遵守，程序靠这个格式识别楼层】
+每条评论单独占一行（评论里需要分段时，用空格或"／"代替换行，不要在一条评论中间换行），格式固定为：
+主楼：楼|楼层编号|网名|评论内容
+跟帖：回|楼层编号|被回复的楼层编号|网名|评论内容
+示例：
+楼|1|某某|……
+楼|2|某某|……
+回|3|2|某某|……
+回|4|3|某某|……
+楼|5|某某|……
+- 楼层编号从1开始连续递增，主楼和跟帖共用同一个编号序列；跟帖里的"被回复的楼层编号"填它回应的那一楼（可以是主楼，也可以是另一条跟帖）。
+- 竖线 | 只用来分隔字段，评论内容和网名里都不要再出现竖线。
+- 除了这些格式行，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。${weiboBlock}${planBlock}
 ${worldInfoBlock}${memoryBlock}
 【剧情片段】
 ${story}
@@ -460,7 +562,7 @@ ${story}
 【观察者评论】`;
 }
 
-async function callCustomApi(prompt, apiConfig) {
+async function callCustomApi(prompt, apiConfig, maxTokens) {
     let url = String(apiConfig.endpoint || '').trim();
     if (!url) {
         throw new Error('自定义API的端点URL没有填写');
@@ -481,6 +583,7 @@ async function callCustomApi(prompt, apiConfig) {
             model: apiConfig.model || undefined,
             messages: [{ role: 'user', content: prompt }],
             stream: false,
+            ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         }),
     });
 
@@ -625,57 +728,214 @@ function adoptToInput(realName, content) {
     toastr.success('已填入输入框，确认没问题再自己点发送。', '观察者论坛');
 }
 
-// 把生成结果（纯文本，"1楼 - xxx：..." / "└ 2楼 - xxx 回复1楼：..." 这种格式）
-// 解析成一张张"楼层卡片"。判断"是不是跟帖"用的是尽量宽松的规则——
-// 这终究是在猜AI输出的文字格式，不可能100%准确，猜不中的话就当普通主楼显示，不影响阅读。
-// showAdopt: 是否在每条楼层后面加"采纳"按钮（只在同人模式下才有意义，因为要靠"网名（真名）"这个格式提取真名）
-function renderResultInto($el, rawText, showAdopt) {
-    const text = String(rawText || '').trim();
-    if (!text) {
-        $el.text('没有得到结果。');
-        return;
+// ==================== 解析与渲染 ====================
+// 提示词要求AI按固定格式输出：
+//   主贴|网名|内容          （仅微博体）
+//   楼|编号|网名|内容
+//   回|编号|被回复的编号|网名|内容
+// 程序只认这几种行，其余的行（开场白、分隔线、乱入的标签）一律丢掉，所以不会再出现空格子；
+// 跟帖是明确知道回复的哪一楼的，所以会老老实实挂在那一楼下面。
+// 如果AI没按格式写，会尝试识别旧格式（"1楼 - 某某：……"），实在认不出才退回逐行显示。
+
+// 去掉"构思"部分（AI在写正文之前的草稿，读者不需要看到）和零散的标签
+function stripPlanBlock(rawText) {
+    let t = String(rawText ?? '');
+    t = t.replace(/<构思>[\s\S]*?<\/构思>/g, '');
+    t = t.replace(/<构思>[\s\S]*$/, ''); // 没写结束标签：说明输出在构思阶段就被截断了
+    return t.trim();
+}
+
+const RE_MAIN = /^(?:【主贴】|\[主贴\]|主贴)\s*([\s\S]*)$/;
+const RE_FLOOR = /^(?:主?楼)\s*[|｜]\s*(\d+)\s*[|｜]\s*([^|｜]+?)\s*[|｜]\s*([\s\S]+)$/;
+const RE_REPLY = /^回(?:复)?\s*[|｜]\s*(\d+)\s*[|｜]\s*(\d+)\s*[|｜]\s*([^|｜]+?)\s*[|｜]\s*([\s\S]+)$/;
+const RE_LEGACY = /^(\d+)\s*楼\s*[-–—－]?\s*(.+?)\s*(?:回复\s*(\d+)\s*楼\s*)?[:：]\s*([\s\S]+)$/;
+const LEGACY_REPLY_MARK = /^[└╰↳→>＞»]+/;
+
+function parseForumText(text) {
+    const result = { mainPost: null, roots: [], count: 0 };
+    const byNum = new Map();
+    let last = null;
+    let lastRoot = null;
+
+    function addItem(item) {
+        let target = null;
+        if (item.kind === 'reply') {
+            target = item.replyTo != null ? byNum.get(item.replyTo) : null;
+            const root = target ? target.root : lastRoot;
+            if (root) {
+                item.root = root;
+                item.replyToName = target && target !== root ? target.name : '';
+                root.children.push(item);
+            } else {
+                item.kind = 'floor'; // 找不到可以挂的主楼，就当主楼显示
+            }
+        }
+        if (item.kind === 'floor') {
+            item.root = item;
+            item.children = [];
+            result.roots.push(item);
+            lastRoot = item;
+        }
+        if (Number.isFinite(item.num) && !byNum.has(item.num)) byNum.set(item.num, item);
+        result.count++;
+        last = item;
     }
 
-    const rawLines = text.split(/\r?\n/).filter(l => l.trim());
-    let html = '';
-    const floorLines = []; // 跟 .future-observer-comment / .future-observer-reply 渲染顺序一一对应，用于事后挂"采纳"按钮的数据
+    for (const rawLine of String(text || '').split(/\r?\n/)) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) continue;
+        let lead = trimmed.replace(/^[*`\s]+/, '');
+        if (/^\*\*/.test(trimmed)) lead = lead.replace(/\*+\s*$/, '');
+        if (!lead) continue;
 
-    for (const rawLine of rawLines) {
-        const hadLeadingSpace = /^[ \t　]+/.test(rawLine);
-        const line = rawLine.trim();
-
-        // 微博体的"主贴"单独识别，渲染成醒目的帖子头条样式
-        const isMainPost = /^【?主贴】?/.test(line);
-        if (isMainPost) {
-            const cleanedPost = line.replace(/^【?主贴】?\s*[:：]?\s*/, '');
-            html += `<div class="future-observer-mainpost">${escapeHtml(cleanedPost)}</div>`;
+        let m = lead.match(RE_MAIN);
+        if (m) {
+            if (!result.mainPost) {
+                const rest = m[1].replace(/^[|｜:：\s]+/, '');
+                let name = '';
+                let content = rest;
+                const sp = rest.match(/^([^|｜:：]{1,30}?)\s*[|｜:：]\s*([\s\S]+)$/);
+                if (sp) { name = sp[1].trim(); content = sp[2].trim(); }
+                if (content) { result.mainPost = { name, content }; last = result.mainPost; }
+            }
             continue;
         }
 
-        const isReply = hadLeadingSpace
-            || /^[└╰↳→>＞»]+/.test(line)
-            || /回复\s*\d*\s*楼/.test(line)
-            || /^楼上/.test(line);
-        const cleaned = line.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
-        const escaped = escapeHtml(cleaned);
-        html += isReply
-            ? `<div class="future-observer-reply"><span class="future-observer-line-text">${escaped}</span></div>`
-            : `<div class="future-observer-comment"><span class="future-observer-line-text">${escaped}</span></div>`;
-        floorLines.push(cleaned);
+        m = lead.match(RE_REPLY);
+        if (m) {
+            addItem({ kind: 'reply', num: Number(m[1]), replyTo: Number(m[2]), name: m[3].trim(), content: m[4].trim() });
+            continue;
+        }
+
+        m = lead.match(RE_FLOOR);
+        if (m) {
+            addItem({ kind: 'floor', num: Number(m[1]), replyTo: null, name: m[2].trim(), content: m[3].trim() });
+            continue;
+        }
+
+        const legacyText = lead.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
+        m = legacyText.match(RE_LEGACY);
+        if (m) {
+            const isReply = LEGACY_REPLY_MARK.test(trimmed) || m[3] != null;
+            addItem({
+                kind: isReply ? 'reply' : 'floor',
+                num: Number(m[1]),
+                replyTo: m[3] != null ? Number(m[3]) : null,
+                name: m[2].trim(),
+                content: m[4].trim(),
+            });
+            continue;
+        }
+
+        // 认不出格式的行：纯符号/分隔线/孤立标签直接丢；像是上一条评论的续行就接上去；开场白（还没有任何评论时）丢掉
+        if (!/[\p{L}\p{N}]/u.test(lead)) continue;
+        if (/^<\/?[^>]{1,30}>$/.test(lead)) continue;
+        if (/^[-=_~—]{3,}$/.test(lead)) continue;
+        if (last) last.content += '\n' + lead;
+    }
+    return result;
+}
+
+// 把解析结果还原成朴素文字，存进"记忆"给AI下一轮看；不带那套竖线格式，避免AI下一轮被带偏
+function forumToPlainText(parsed) {
+    const lines = [];
+    if (parsed.mainPost) {
+        lines.push(`【主贴】${parsed.mainPost.name ? parsed.mainPost.name + '：' : ''}${parsed.mainPost.content}`);
+    }
+    for (const root of parsed.roots) {
+        lines.push(`${root.num}楼 ${root.name}：${root.content}`);
+        for (const child of root.children) {
+            const to = child.replyToName ? `回复${child.replyToName}` : `回复${root.num}楼`;
+            lines.push(`    ↳ ${child.num}楼 ${child.name} ${to}：${child.content}`);
+        }
+    }
+    return lines.join('\n');
+}
+
+// 生成结果的统一清洗入口：去构思 → 解析 → 返回清洗后的文字（存历史/记忆用）
+function cleanForumResult(rawText) {
+    return stripPlanBlock(rawText);
+}
+
+function floorLabel(item) {
+    return Number.isFinite(item.num) ? `${item.num}楼` : '';
+}
+
+// 把生成结果渲染成"楼层卡片"。showAdopt: 是否在每条后面加"采纳"按钮（只在同人模式下有意义）
+function renderResultInto($el, rawText, showAdopt) {
+    const text = stripPlanBlock(rawText);
+    if (!text) {
+        $el.text(/<构思>/.test(String(rawText ?? ''))
+            ? '输出在“构思”阶段就被截断了，没写到正文。请在设置里调大“最大输出长度”，或关掉“先构思再写”后重试。'
+            : '没有得到结果。');
+        return;
     }
 
-    $el.html(html || escapeHtml(text));
+    const parsed = parseForumText(text);
+    const adoptSource = []; // 与 data-fo-i 下标一一对应，用于事后挂"采纳"按钮
+    let html = '<div class="future-observer-feed">';
+
+    if (parsed.count === 0 && !parsed.mainPost) {
+        // 完全认不出格式：退回逐行显示（过滤掉空行和纯符号行）
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => /[\p{L}\p{N}]/u.test(l));
+        lines.forEach((line, i) => {
+            const fan = parseFandomLine(line);
+            adoptSource[i] = fan ? { realName: fan.realName, content: fan.content } : null;
+            html += `<div class="future-observer-floor"><div class="future-observer-text">${escapeHtml(line)}</div>`
+                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+        });
+    } else {
+        if (parsed.mainPost) {
+            const mp = parsed.mainPost;
+            html += '<div class="future-observer-mainpost"><div class="future-observer-mainpost-head">'
+                + '<span class="future-observer-chip">主贴</span>'
+                + (mp.name ? `<span class="future-observer-name">${escapeHtml(mp.name)}</span>` : '')
+                + `</div><div class="future-observer-text">${escapeHtml(mp.content)}</div></div>`;
+        }
+
+        let idx = 0;
+        const pushAdopt = (item) => {
+            const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
+            adoptSource[idx] = m && item.content
+                ? { realName: m[1].trim(), content: item.content }
+                : null;
+            return idx++;
+        };
+
+        for (const root of parsed.roots) {
+            const i = pushAdopt(root);
+            html += '<div class="future-observer-floor">'
+                + `<div class="future-observer-floor-head"><span class="future-observer-name">${escapeHtml(root.name)}</span>`
+                + `<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
+                + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
+                + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
+
+            if (root.children.length) {
+                html += '<div class="future-observer-replies">';
+                for (const child of root.children) {
+                    const j = pushAdopt(child);
+                    html += '<div class="future-observer-reply">'
+                        + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>`
+                        + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
+                        + `<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
+                        + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
+                        + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+    }
+
+    html += '</div>';
+    $el.html(html);
 
     if (showAdopt) {
-        const floors = $el.find('.future-observer-comment, .future-observer-reply');
-        floors.each(function (i) {
-            const raw = floorLines[i];
-            const parsed = raw ? parseFandomLine(raw) : null;
-            if (!parsed) return; // 这行解析不出"网名（真名）"格式，就不加采纳按钮
-            const btn = $('<button type="button" class="future-observer-adopt-btn" title="采纳到酒馆输入框">📥 采纳</button>');
-            btn.data('fo-name', parsed.realName);
-            btn.data('fo-content', parsed.content);
-            $(this).append(btn);
+        adoptSource.forEach((src, i) => {
+            if (!src) return;
+            const $btn = $('<button type="button" class="future-observer-adopt-btn" title="转成 /sendas 指令填进输入框（不会自动发送）">📥 采纳</button>');
+            $btn.data('fo-name', src.realName).data('fo-content', src.content);
+            $el.find(`.future-observer-actions[data-fo-i="${i}"]`).append($btn);
         });
     }
 }
@@ -724,6 +984,7 @@ async function generateObservation() {
         return;
     }
 
+    setOptionsOpen(false); // 一点生成就把选项折叠起来，把空间让给评论区
     buttons.prop('disabled', true).text('观测中…');
     resultBoxes.text('🔭 正在观察……');
 
@@ -733,7 +994,7 @@ async function generateObservation() {
         let result;
 
         if (settings.customApi?.enabled) {
-            result = await callCustomApi(prompt, settings.customApi);
+            result = await callCustomApi(prompt, settings.customApi, Number(settings.maxOutputTokens) || 0);
         } else {
             const ctx = getContext();
             let generateQuietPrompt = ctx.generateQuietPrompt;
@@ -743,21 +1004,30 @@ async function generateObservation() {
             result = await generateQuietPrompt({
                 quietPrompt: prompt,
                 quietToLoud: false,
+                ...(Number(settings.maxOutputTokens) > 0 ? { responseLength: Number(settings.maxOutputTokens) } : {}),
             });
         }
 
         const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
+        const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
             renderResultInto($(this), result, showAdopt);
         });
+        $('.future-observer-popup-result').scrollTop(0);
+
+        if (!cleaned) {
+            // 只有构思、没有正文（多半是输出长度不够被截断了），不存历史也不存记忆，免得污染
+            return;
+        }
 
         const scopeKey = getMemoryScopeKey(settings);
-        await pushHistoryEntry(scopeKey, result); // 历史记录不受"记忆开关"影响，一直都会存
+        await pushHistoryEntry(scopeKey, cleaned); // 历史记录不受"记忆开关"影响，一直都会存
         historyCursor[scopeKey] = getHistoryList(scopeKey).length - 1; // 新生成的这条，游标指向最新
         refreshHistoryNav();
 
         if (settings.memoryEnabled) {
-            await saveMemoryEntry(scopeKey, result);
+            const parsed = parseForumText(cleaned);
+            await saveMemoryEntry(scopeKey, parsed.count ? forumToPlainText(parsed) : cleaned);
         }
     } catch (error) {
         console.error('[观察者论坛]', error);
@@ -834,6 +1104,9 @@ function syncControlsFromSettings() {
     $('.future-observer-identity-select').each(function () {
         renderIdentityOptions($(this), settings.timeDirection, settings.identity);
     });
+    $('.future-observer-richness-select').val(RICHNESS_SPECS[settings.richness] ? settings.richness : 'rich');
+    $('.future-observer-plan-toggle').prop('checked', settings.planFirst !== false);
+    $('#future-observer-maxtokens').val(Number(settings.maxOutputTokens) || 0);
     applyPopupTheme();
     refreshHistoryNav();
 
@@ -843,6 +1116,7 @@ function syncControlsFromSettings() {
     $('#future-observer-fandom-work-wrap').toggle(showFandomInput);
     $('#future-observer-fandom-history-list').hide();
     $('#future-observer-fandom-sameworld').prop('checked', !!settings.fandomSameWorld).closest('label').toggle(showFandomInput);
+    renderOptionChips();
 
     $('#future-observer-customapi-toggle').prop('checked', !!settings.customApi?.enabled);
     $('#future-observer-customapi-fields').toggle(!!settings.customApi?.enabled);
@@ -877,6 +1151,7 @@ function bindSharedControls() {
         settings.fandomWork = String($(this).val()).trim();
         rememberFandomWork(settings.fandomWork);
         saveSettings();
+        renderOptionChips();
     });
 
     $(document).off('click.futureObserverFandomHistoryArrow').on('click.futureObserverFandomHistoryArrow', '#future-observer-fandom-history-arrow', function (e) {
@@ -890,6 +1165,7 @@ function bindSharedControls() {
         settings.fandomWork = value;
         $('#future-observer-fandom-work').val(value);
         saveSettings();
+        renderOptionChips();
         $('#future-observer-fandom-history-list').hide();
     });
 
@@ -910,10 +1186,37 @@ function bindSharedControls() {
         toastr.info('作品名 / 穿越世界 / 微博体 / 记忆已重置。', '观察者论坛');
     });
 
+    $(document).off('click.futureObserverOptionsToggle').on('click.futureObserverOptionsToggle', '#future-observer-options-toggle, #future-observer-chips', function () {
+        setOptionsOpen(!$('#future-observer-optionspanel').is(':visible'));
+    });
+
+    $(document).off('change.futureObserverRichness').on('change.futureObserverRichness', '.future-observer-richness-select', function () {
+        const settings = getSettings();
+        settings.richness = String($(this).val());
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverPlan').on('change.futureObserverPlan', '.future-observer-plan-toggle', function () {
+        const settings = getSettings();
+        settings.planFirst = $(this).is(':checked');
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverMaxTokens').on('change.futureObserverMaxTokens', '#future-observer-maxtokens', function () {
+        const settings = getSettings();
+        const n = Math.max(0, Math.min(64000, Math.floor(Number($(this).val()) || 0)));
+        settings.maxOutputTokens = n;
+        $(this).val(n);
+        saveSettings();
+    });
+
     $(document).off('change.futureObserverFandomSameWorld').on('change.futureObserverFandomSameWorld', '#future-observer-fandom-sameworld', function () {
         const settings = getSettings();
         settings.fandomSameWorld = $(this).is(':checked');
         saveSettings();
+        renderOptionChips();
     });
 
     $(document).off('click.futureObserverGenerate').on('click.futureObserverGenerate', '.future-observer-generate-btn', generateObservation);
@@ -995,12 +1298,14 @@ function bindSharedControls() {
         const settings = getSettings();
         settings.weiboMode = $(this).is(':checked');
         saveSettings();
+        renderOptionChips();
     });
 
     $(document).off('change.futureObserverMemoryToggle').on('change.futureObserverMemoryToggle', '#future-observer-popup-memory-toggle', function () {
         const settings = getSettings();
         settings.memoryEnabled = $(this).is(':checked');
         saveSettings();
+        renderOptionChips();
     });
 
     $('#future-observer-customapi-toggle').off('change').on('change', function () {
@@ -1062,13 +1367,13 @@ function buildFloatingUI() {
     const popup = $(`
         <div id="future-observer-popup" class="future-observer-popup" style="display:none;">
             <div class="future-observer-popup-header">
-                <span>🔭 观察者论坛</span>
+                <span class="future-observer-popup-title"><i class="future-observer-dot"></i>观察者论坛</span>
                 <div class="future-observer-popup-header-actions">
                     <span id="future-observer-popup-resize" class="future-observer-popup-icon-btn" title="放大">⤢</span>
                     <span id="future-observer-popup-close" class="future-observer-popup-icon-btn" title="关闭">✕</span>
                 </div>
             </div>
-            <div class="future-observer-popup-controls">
+            <div class="future-observer-quickrow">
                 <select class="future-observer-direction-select">
                     <option value="past">过去</option>
                     <option value="present">现在</option>
@@ -1076,23 +1381,41 @@ function buildFloatingUI() {
                     <option value="otherworld">异世界</option>
                 </select>
                 <select class="future-observer-identity-select"></select>
+                <button type="button" id="future-observer-options-toggle" class="future-observer-options-toggle" title="更多选项">⚙</button>
+            </div>
+            <div id="future-observer-chips" class="future-observer-chips"></div>
+            <div id="future-observer-optionspanel" class="future-observer-optionspanel" style="display:none;">
                 <div id="future-observer-fandom-work-wrap" class="future-observer-fandom-work-wrap" style="display:none;">
-                    <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="留空=AI自由选择，也可填“火影忍者”“海贼王”等">
-                    <span id="future-observer-fandom-history-arrow" class="future-observer-popup-icon-btn" title="之前填过的作品">▾</span>
+                    <div class="future-observer-fandom-inputrow">
+                        <input type="text" id="future-observer-fandom-work" class="future-observer-fandom-input" placeholder="作品名：留空=AI自由选择，或填“火影忍者”">
+                        <span id="future-observer-fandom-history-arrow" class="future-observer-popup-icon-btn" title="之前填过的作品">▾</span>
+                    </div>
                     <div id="future-observer-fandom-history-list" class="future-observer-fandom-history-list" style="display:none;"></div>
                 </div>
                 <label class="future-observer-popup-checkbox" style="display:none;"><input type="checkbox" id="future-observer-fandom-sameworld"> 剧情本身就发生在这部作品的世界里（穿越/同人卡）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-weibo-toggle"> 微博体（先发主贴，评论围绕主贴讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
-                <button type="button" id="future-observer-reset-options" class="future-observer-reset-btn" title="把作品名/穿越世界/微博体/记忆这几个选项清空复位">↺ 重置选项</button>
+                <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（更充实，更慢）</label>
+                <div class="future-observer-popup-selectrow">
+                    <span>内容量</span>
+                    <select class="future-observer-richness-select">
+                        <option value="brief">精简</option>
+                        <option value="normal">标准</option>
+                        <option value="rich">丰富</option>
+                        <option value="epic">长篇</option>
+                    </select>
+                    <button type="button" id="future-observer-reset-options" class="future-observer-reset-btn" title="把作品名/穿越世界/微博体/记忆这几个选项清空复位">↺ 重置</button>
+                </div>
             </div>
-            <button class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
             <div class="future-observer-history-nav">
                 <button type="button" class="future-observer-history-prev menu_button" title="上一条">◀</button>
                 <span class="future-observer-history-index">暂无历史</span>
                 <button type="button" class="future-observer-history-next menu_button" title="下一条">▶</button>
             </div>
-            <div class="future-observer-result future-observer-popup-result">点击“生成评论区”查看。</div>
+            <div class="future-observer-result future-observer-popup-result">点击下方“生成评论区”查看。</div>
+            <div class="future-observer-popup-footer">
+                <button type="button" class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
+            </div>
         </div>
     `);
 
@@ -1159,16 +1482,45 @@ function applyPopupExpandState() {
     if (popup.is(':visible')) clampPopupIntoView(popup);
 }
 
-// 弹窗配色跟着"时间方向"变化：过去偏复古黄褐、未来偏科幻蓝、异世界偏紫、现在保持中性色
+// 配色跟着"时间方向"变化：过去偏复古黄褐、未来偏科幻蓝、异世界偏紫、现在保持中性绿灰。
+// 悬浮弹窗和设置抽屉共用同一套主题色。
 function applyPopupTheme() {
     const settings = getSettings();
-    const popup = $('#future-observer-popup');
-    if (!popup.length) return;
-    popup.removeClass(
-        'future-observer-popup-theme-past future-observer-popup-theme-present '
-        + 'future-observer-popup-theme-future future-observer-popup-theme-otherworld',
+    const targets = $('#future-observer-popup, #future-observer-settings');
+    if (!targets.length) return;
+    targets.removeClass(
+        'future-observer-theme-past future-observer-theme-present '
+        + 'future-observer-theme-future future-observer-theme-otherworld',
     );
-    popup.addClass(`future-observer-popup-theme-${settings.timeDirection || 'future'}`);
+    targets.addClass(`future-observer-theme-${settings.timeDirection || 'future'}`);
+}
+
+// 展开/折叠"更多选项"面板（只影响界面，不存进设置，每次打开弹窗默认折叠）
+function setOptionsOpen(open) {
+    $('#future-observer-optionspanel').toggle(!!open);
+    $('#future-observer-options-toggle').toggleClass('is-open', !!open);
+}
+
+// 折叠状态下，在下拉框下面用小标签显示"当前开了哪些选项"，不用展开也能一眼看到
+function renderOptionChips() {
+    const settings = getSettings();
+    const $chips = $('#future-observer-chips');
+    if (!$chips.length) return;
+    const chips = [];
+    if (settings.timeDirection === 'otherworld' && settings.identity === 'fandom') {
+        const work = String(settings.fandomWork || '').trim();
+        chips.push(work ? `《${work}》` : '作品随机');
+        if (settings.fandomSameWorld) chips.push('同一世界');
+    }
+    if (settings.weiboMode) chips.push('微博体');
+    if (settings.memoryEnabled) chips.push('记忆');
+    const richLabel = (RICHNESS_OPTIONS.find(o => o.value === settings.richness) || RICHNESS_OPTIONS[2]).label;
+    chips.push(`内容·${richLabel}`);
+    if (settings.planFirst !== false) chips.push('先构思');
+    $chips.empty();
+    for (const text of chips) {
+        $chips.append($('<span class="future-observer-chip-tag"></span>').text(text));
+    }
 }
 
 function clampPopupIntoView(popup) {
@@ -1214,6 +1566,7 @@ function togglePopup() {
         return;
     }
     syncControlsFromSettings();
+    setOptionsOpen(false); // 每次打开弹窗，选项默认折叠
     const settings = getSettings();
     // 先显示再定位，这样才能测量到真实尺寸（display:none 的元素测量不到宽高）
     popup.show();

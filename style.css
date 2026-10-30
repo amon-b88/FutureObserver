@@ -1,8 +1,10 @@
-.future-observer-settings{margin-top:8px}
+/* ==================== 设置抽屉 ==================== */
+.future-observer-settings{--fo-accent:150,160,175;margin-top:8px}
 .future-observer-desc{opacity:.8;margin-bottom:10px;line-height:1.45}
+.future-observer-hint{opacity:.65;font-size:.85em;line-height:1.5;margin:-2px 0 6px}
 .future-observer-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:7px 0}
 .future-observer-row label{display:flex;gap:5px;align-items:center}
-.future-observer-row input[type="number"]{width:70px}
+.future-observer-row input[type="number"]{width:80px}
 .future-observer-row input[type="text"],
 .future-observer-row input[type="password"]{flex:1;min-width:200px}
 .future-observer-row select{max-width:220px}
@@ -10,103 +12,140 @@
 .future-observer-result-details{margin-top:8px}
 .future-observer-result-details summary{cursor:pointer;user-select:none}
 
+/* 按时间方向切换主题色：过去=复古黄褐，现在=中性绿灰，未来=科幻蓝，异世界=紫 */
+.future-observer-theme-past{--fo-accent:204,150,84}
+.future-observer-theme-present{--fo-accent:122,190,152}
+.future-observer-theme-future{--fo-accent:100,172,255}
+.future-observer-theme-otherworld{--fo-accent:182,124,255}
+
 /* 历史记录导航条：上一条/第几条/下一条 */
 .future-observer-history-nav{
     display:flex;
     align-items:center;
     justify-content:center;
-    gap:8px;
+    gap:10px;
     margin-top:8px;
 }
 .future-observer-history-nav button{
-    padding:2px 10px;
+    padding:2px 12px;
     font-size:.85em;
     line-height:1.6;
 }
-.future-observer-history-nav button:disabled{
-    opacity:.35;
-    cursor:not-allowed;
-}
+.future-observer-history-nav button:disabled{opacity:.3;cursor:not-allowed}
 .future-observer-history-index{
-    font-size:.85em;
-    opacity:.75;
-    min-width:64px;
+    font-size:.82em;
+    opacity:.65;
+    min-width:70px;
     text-align:center;
 }
 
+/* 结果区（设置抽屉和悬浮弹窗共用） */
 .future-observer-result{
-    white-space:pre-wrap;
     line-height:1.6;
     margin-top:8px;
     padding:10px;
-    border-radius:8px;
-    background:rgba(127,127,127,.08);
+    border-radius:10px;
+    background:rgba(127,127,127,.07);
     min-height:60px;
+    white-space:normal;
+    word-break:break-word;
 }
 
-/* 观测评论渲染成"楼层卡片"样式，而不是一坨纯文字 */
-.future-observer-comment{
-    padding:7px 10px;
-    margin:6px 0;
-    border-radius:8px;
-    background:rgba(255,255,255,.06);
-    line-height:1.55;
+/* ==================== 评论区：楼层卡片 ==================== */
+.future-observer-feed{display:flex;flex-direction:column;gap:9px}
+
+.future-observer-floor{
+    padding:11px 13px;
+    border-radius:13px;
+    background:rgba(127,127,127,.09);
+    border:1px solid rgba(127,127,127,.12);
 }
-.future-observer-reply{
-    padding:6px 10px;
-    margin:2px 0 8px 18px;
-    border-left:2px solid rgba(var(--fo-accent,127,180,255),.5);
-    background:rgba(var(--fo-accent,127,180,255),.08);
-    border-radius:0 8px 8px 0;
-    font-size:.93em;
-    line-height:1.5;
-    opacity:.92;
+.future-observer-floor-head,
+.future-observer-reply-head{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    margin-bottom:5px;
 }
-.future-observer-line-text{display:inline}
-/* "采纳"按钮：只在同人模式下才会出现，挂在每条楼层文字后面 */
-.future-observer-adopt-btn{
-    display:inline-block;
-    margin-left:8px;
+.future-observer-name{
+    font-weight:600;
+    font-size:.92em;
+    color:rgb(var(--fo-accent));
+    min-width:0;
+    overflow-wrap:anywhere;
+}
+.future-observer-num{
+    margin-left:auto;
+    flex-shrink:0;
+    font-size:.78em;
+    opacity:.4;
+    font-variant-numeric:tabular-nums;
+}
+.future-observer-text{
+    line-height:1.72;
+    font-size:.95em;
+    white-space:pre-wrap;
+    overflow-wrap:anywhere;
+}
+
+/* 楼中楼：挂在被回复的那一楼下面的小框 */
+.future-observer-replies{
+    margin-top:9px;
+    padding:2px 11px;
+    border-radius:10px;
+    background:rgba(var(--fo-accent),.08);
+    border-left:3px solid rgba(var(--fo-accent),.45);
+}
+.future-observer-reply{padding:8px 0}
+.future-observer-reply + .future-observer-reply{border-top:1px solid rgba(127,127,127,.16)}
+.future-observer-reply .future-observer-text{font-size:.91em;line-height:1.65;opacity:.95}
+.future-observer-reply .future-observer-name{font-size:.86em}
+.future-observer-reply-head{margin-bottom:3px}
+.future-observer-reply-to{font-size:.8em;opacity:.55}
+.future-observer-reply-to::before{content:"↳ "}
+
+/* 微博体的主贴：比普通楼层醒目 */
+.future-observer-mainpost{
+    padding:13px 15px;
+    border-radius:15px;
+    background:linear-gradient(140deg, rgba(var(--fo-accent),.22), rgba(var(--fo-accent),.07));
+    border:1px solid rgba(var(--fo-accent),.4);
+}
+.future-observer-mainpost-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.future-observer-mainpost .future-observer-text{font-weight:600;font-size:1.02em;line-height:1.65}
+.future-observer-chip{
+    font-size:.72em;
+    font-weight:700;
+    letter-spacing:.08em;
     padding:1px 8px;
-    font-size:.82em;
+    border-radius:999px;
+    background:rgb(var(--fo-accent));
+    color:#101114;
+}
+
+/* "采纳"按钮：只在同人模式下出现 */
+.future-observer-actions:empty{display:none}
+.future-observer-actions{display:block;margin-top:6px}
+.future-observer-adopt-btn{
+    padding:2px 10px;
+    font-size:.8em;
     line-height:1.6;
-    border-radius:6px;
-    border:1px solid rgba(var(--fo-accent,127,180,255),.4);
-    background:rgba(var(--fo-accent,127,180,255),.1);
+    border-radius:999px;
+    border:1px solid rgba(var(--fo-accent),.45);
+    background:rgba(var(--fo-accent),.1);
     color:inherit;
     cursor:pointer;
-    vertical-align:middle;
 }
-.future-observer-adopt-btn:hover{
-    background:rgba(var(--fo-accent,127,180,255),.22);
-}
-/* 微博体的"主贴"，比普通楼层更醒目，视觉上一眼看出这是帖子标题 */
-.future-observer-mainpost{
-    padding:10px 12px;
-    margin:2px 0 10px;
-    border-radius:10px;
-    background:rgba(var(--fo-accent,255,200,120),.14);
-    border:1px solid rgba(var(--fo-accent,255,200,120),.4);
-    font-weight:bold;
-    font-size:1.02em;
-    line-height:1.6;
-}
+.future-observer-adopt-btn:hover{background:rgba(var(--fo-accent),.24)}
 
+/* ==================== 自定义 API ==================== */
 .future-observer-customapi-fields{
     margin:4px 0 10px 4px;
     padding:8px 10px;
     border-left:2px solid rgba(255,255,255,.15);
 }
-/* 模型名通常比较长，"可选模型"下拉框撑满这一行，不受通用 select 的最大宽度限制 */
-#future-observer-customapi-model-select{
-    flex:1;
-    min-width:200px;
-    max-width:100%;
-}
-#future-observer-customapi-fetch-models{
-    flex-shrink:0;
-    white-space:nowrap;
-}
+#future-observer-customapi-model-select{flex:1;min-width:200px;max-width:100%}
+#future-observer-customapi-fetch-models{flex-shrink:0;white-space:nowrap}
 .future-observer-customapi-note{
     opacity:.75;
     font-size:.85em;
@@ -115,7 +154,7 @@
     color:#e0a95c;
 }
 
-/* 悬浮球 */
+/* ==================== 悬浮球 ==================== */
 .future-observer-fab{
     position:fixed;
     right:20px;
@@ -123,8 +162,8 @@
     width:50px;
     height:50px;
     border-radius:50%;
-    background:linear-gradient(145deg, rgba(45,45,50,.92), rgba(20,20,24,.92));
-    border:1px solid rgba(255,255,255,.18);
+    background:linear-gradient(145deg, rgba(48,50,58,.94), rgba(20,21,26,.94));
+    border:1px solid rgba(255,255,255,.2);
     color:#fff;
     font-size:23px;
     display:flex;
@@ -132,25 +171,26 @@
     justify-content:center;
     cursor:grab;
     z-index:9999;
-    box-shadow:0 3px 10px rgba(0,0,0,.45);
+    box-shadow:0 4px 14px rgba(0,0,0,.5);
     user-select:none;
     touch-action:none;
     transition:box-shadow .15s ease;
 }
 .future-observer-fab:active{cursor:grabbing;box-shadow:0 1px 4px rgba(0,0,0,.5)}
 
-/* 悬浮弹窗 */
+/* ==================== 悬浮弹窗 ==================== */
 .future-observer-popup{
-    --fo-accent:150,150,160;
-    --fo-header-bg:rgba(255,255,255,.04);
+    --fo-accent:122,190,152;
     position:fixed;
-    width:320px;
+    width:380px;
     max-width:calc(100vw - 20px);
-    max-height:70vh;
-    background:rgba(18,18,20,.97);
+    max-height:82vh;
+    max-height:min(82dvh, 760px);
+    background:rgba(20,21,26,.98);
+    color:#e8e9ee;
     border:1px solid rgba(var(--fo-accent),.3);
-    border-radius:12px;
-    box-shadow:0 6px 20px rgba(0,0,0,.55);
+    border-radius:16px;
+    box-shadow:0 14px 44px rgba(0,0,0,.6);
     z-index:9999;
     display:flex;
     flex-direction:column;
@@ -159,146 +199,214 @@
 }
 .future-observer-popup *{box-sizing:border-box}
 
-/* 按时间方向切换主题色：过去=复古黄褐，现在=中性绿灰，未来=科幻蓝，异世界=紫 */
-.future-observer-popup-theme-past{ --fo-accent:196,140,74; --fo-header-bg:rgba(196,140,74,.14); }
-.future-observer-popup-theme-present{ --fo-accent:120,190,150; --fo-header-bg:rgba(120,190,150,.10); }
-.future-observer-popup-theme-future{ --fo-accent:90,170,255; --fo-header-bg:rgba(90,170,255,.12); }
-.future-observer-popup-theme-otherworld{ --fo-accent:180,110,255; --fo-header-bg:rgba(180,110,255,.12); }
-
 .future-observer-popup-header{
     display:flex;
     align-items:center;
     justify-content:space-between;
-    padding:10px 12px;
-    font-weight:bold;
-    background:var(--fo-header-bg);
-    border-bottom:1px solid rgba(var(--fo-accent),.35);
+    padding:11px 14px;
     cursor:move;
-    transition:background .2s ease;
+    flex-shrink:0;
+    background:linear-gradient(180deg, rgba(var(--fo-accent),.16), rgba(var(--fo-accent),0));
+    border-bottom:1px solid rgba(255,255,255,.06);
 }
-.future-observer-popup-header-actions{
-    display:flex;
-    gap:4px;
-    align-items:center;
-    cursor:default; /* 头部整体可拖动，但按钮区域自己是普通指针，不继承 move 光标 */
+.future-observer-popup-title{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.03em}
+.future-observer-dot{
+    width:8px;height:8px;border-radius:50%;
+    background:rgb(var(--fo-accent));
+    box-shadow:0 0 8px rgba(var(--fo-accent),.8);
 }
+.future-observer-popup-header-actions{display:flex;gap:2px;align-items:center;cursor:default}
 .future-observer-popup-icon-btn{
     cursor:pointer;
-    opacity:.65;
+    opacity:.6;
     font-size:1.05em;
     line-height:1;
-    padding:2px 6px;
-    border-radius:4px;
+    padding:5px 8px;
+    border-radius:8px;
 }
 .future-observer-popup-icon-btn:hover{opacity:1;background:rgba(255,255,255,.08)}
-.future-observer-popup-controls{
+
+/* 常驻的一行：时间方向 + 身份 + 更多选项按钮 */
+.future-observer-quickrow{
+    display:flex;
+    gap:8px;
+    padding:10px 14px 4px;
+    flex-shrink:0;
+}
+.future-observer-popup select,
+.future-observer-popup input[type="text"]{
+    background:rgba(255,255,255,.06);
+    color:#e8e9ee;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:10px;
+    padding:8px 10px;
+    font-size:14px;
+    min-width:0;
+    margin:0;
+}
+.future-observer-popup select:focus,
+.future-observer-popup input[type="text"]:focus{outline:none;border-color:rgba(var(--fo-accent),.6)}
+.future-observer-quickrow select{flex:1 1 0;max-width:none;width:auto}
+.future-observer-options-toggle{
+    flex-shrink:0;
+    width:38px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.06);
+    color:inherit;
+    font-size:16px;
+    cursor:pointer;
+    transition:background .15s ease, transform .2s ease;
+}
+.future-observer-options-toggle:hover{background:rgba(255,255,255,.12)}
+.future-observer-options-toggle.is-open{
+    background:rgba(var(--fo-accent),.22);
+    border-color:rgba(var(--fo-accent),.5);
+    transform:rotate(60deg);
+}
+
+/* 折叠状态下显示"当前选项"的小标签 */
+.future-observer-chips{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+    padding:2px 14px 6px;
+    cursor:pointer;
+    flex-shrink:0;
+}
+.future-observer-chip-tag{
+    font-size:.74em;
+    padding:1px 9px;
+    border-radius:999px;
+    color:rgb(var(--fo-accent));
+    background:rgba(var(--fo-accent),.12);
+    border:1px solid rgba(var(--fo-accent),.25);
+    white-space:nowrap;
+}
+
+/* 展开后的更多选项 */
+.future-observer-optionspanel{
     display:flex;
     flex-direction:column;
-    gap:8px;
-    padding:10px 12px 6px;
-}
-.future-observer-popup-controls select,
-.future-observer-popup-controls input[type="text"]{
-    width:100%;
-    max-width:none;
+    gap:9px;
+    margin:2px 14px 6px;
+    padding:11px 12px;
+    border-radius:12px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.07);
+    max-height:46vh;
+    max-height:46dvh;
+    overflow-y:auto;
+    flex-shrink:0;
 }
 .future-observer-popup-checkbox{
     display:flex;
     align-items:center;
-    gap:6px;
-    font-size:.92em;
+    gap:8px;
+    font-size:.9em;
     line-height:1.4;
-    opacity:.9;
+    opacity:.92;
     cursor:pointer;
+    margin:0;
 }
-
-/* 作品名输入框 + 历史下拉箭头 */
-.future-observer-fandom-work-wrap{
-    position:relative;
-    display:flex;
-    align-items:center;
-    gap:4px;
-    width:100%;
-}
-.future-observer-fandom-work-wrap input[type="text"]{
-    flex:1;
-    min-width:0;
-}
-#future-observer-fandom-history-arrow{
-    flex-shrink:0;
-    user-select:none;
-}
-.future-observer-fandom-history-list{
-    position:absolute;
-    top:100%;
-    left:0;
-    right:0;
-    margin-top:4px;
-    max-height:160px;
-    overflow-y:auto;
-    background:rgba(20,20,22,.98);
-    border:1px solid rgba(var(--fo-accent,150,150,160),.35);
-    border-radius:8px;
-    box-shadow:0 4px 12px rgba(0,0,0,.4);
-    z-index:10000;
-}
-.future-observer-fandom-history-item{
-    padding:6px 10px;
-    font-size:.88em;
-    cursor:pointer;
-}
-.future-observer-fandom-history-item:hover{
-    background:rgba(var(--fo-accent,150,150,160),.15);
-}
-.future-observer-fandom-history-empty{
-    padding:6px 10px;
-    font-size:.85em;
-    opacity:.6;
-}
-
-/* 重置选项按钮 */
+.future-observer-popup-selectrow{display:flex;align-items:center;gap:8px;font-size:.9em}
+.future-observer-popup-selectrow select{flex:1;padding:6px 8px}
 .future-observer-reset-btn{
-    align-self:flex-end;
-    margin-top:-2px;
-    padding:2px 10px;
+    flex-shrink:0;
+    padding:5px 12px;
     font-size:.82em;
-    border-radius:6px;
-    border:1px solid rgba(255,255,255,.2);
+    border-radius:999px;
+    border:1px solid rgba(255,255,255,.18);
     background:rgba(255,255,255,.05);
     color:inherit;
-    opacity:.75;
+    opacity:.8;
     cursor:pointer;
 }
-.future-observer-reset-btn:hover{
-    opacity:1;
-    background:rgba(255,255,255,.1);
-}
+.future-observer-reset-btn:hover{opacity:1;background:rgba(255,255,255,.1)}
 
-/* 显式给按钮和结果区算出确切宽度，不依赖 flex 的 stretch 行为
-   （在部分酒馆主题下 stretch 不生效，会导致按钮/结果区收缩成
-   逐字换行的竖条，这里直接用 calc 强制撑满宽度） */
-.future-observer-popup > .menu_button{
-    width:calc(100% - 24px);
-    margin:4px 12px 10px;
-    white-space:nowrap;
-    text-align:center;
-    flex-shrink:0;
+/* 作品名输入框 + 历史下拉（直接在原位置展开，不悬空，免得被面板裁掉） */
+.future-observer-fandom-work-wrap{display:flex;flex-direction:column;gap:6px;width:100%}
+.future-observer-fandom-inputrow{display:flex;align-items:center;gap:4px}
+.future-observer-fandom-inputrow input[type="text"]{flex:1}
+.future-observer-fandom-history-list{
+    max-height:140px;
+    overflow-y:auto;
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:10px;
+    background:rgba(255,255,255,.04);
+}
+.future-observer-fandom-history-item{padding:7px 11px;font-size:.88em;cursor:pointer}
+.future-observer-fandom-history-item:hover{background:rgba(var(--fo-accent),.16)}
+.future-observer-fandom-history-empty{padding:7px 11px;font-size:.85em;opacity:.55}
+
+/* 弹窗里的历史导航和结果区 */
+.future-observer-popup .future-observer-history-nav{margin:2px 14px 0;flex-shrink:0}
+.future-observer-popup .future-observer-history-nav button{
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:8px;
+    color:inherit;
 }
 .future-observer-popup-result{
-    width:calc(100% - 24px);
-    margin:0 12px 12px;
+    flex:1 1 auto;
+    min-height:140px;
     overflow-y:auto;
-    min-height:90px;
-    max-height:38vh;
+    margin:6px 0 0;
+    padding:6px 14px 14px;
+    background:transparent;
+    border-radius:0;
+    opacity:1;
+    scrollbar-width:thin;
+}
+.future-observer-popup-footer{
+    flex-shrink:0;
+    padding:10px 14px 12px;
+    border-top:1px solid rgba(255,255,255,.07);
+    background:rgba(20,21,26,.98);
+}
+.future-observer-popup-footer .future-observer-generate-btn{
+    display:block;
+    width:100%;
+    margin:0;
+    padding:11px 0;
+    border-radius:12px;
+    font-size:15px;
+    font-weight:600;
+    white-space:nowrap;
+    text-align:center;
+    color:#101114;
+    background:rgb(var(--fo-accent));
+    border:none;
+    cursor:pointer;
+}
+.future-observer-popup-footer .future-observer-generate-btn:disabled{opacity:.55;cursor:wait}
+
+/* 放大模式（电脑上用） */
+.future-observer-popup.future-observer-popup-expanded{
+    width:min(580px, calc(100vw - 20px));
+    height:86vh;
+    height:min(86dvh, 840px);
+    max-height:86vh;
 }
 
-/* 放大模式：面板变成一个更大的固定尺寸窗口，结果区占满剩余空间 */
-.future-observer-popup.future-observer-popup-expanded{
-    width:min(480px, calc(100vw - 20px));
-    height:min(85vh, 760px);
-    max-height:85vh;
-}
-.future-observer-popup.future-observer-popup-expanded .future-observer-popup-result{
-    flex:1 1 auto;
-    max-height:none;
+/* ==================== 手机：弹窗变成铺满屏幕的底部抽屉 ==================== */
+@media (max-width: 640px){
+    .future-observer-popup,
+    .future-observer-popup.future-observer-popup-expanded{
+        left:0 !important;
+        right:0 !important;
+        top:auto !important;
+        bottom:0 !important;
+        width:100% !important;
+        max-width:100% !important;
+        height:90vh !important;
+        height:90dvh !important;
+        max-height:none !important;
+        border-radius:18px 18px 0 0;
+        border-bottom:none;
+    }
+    #future-observer-popup-resize{display:none}
+    .future-observer-popup-header{cursor:default}
+    .future-observer-popup-footer{padding-bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
+    .future-observer-optionspanel{max-height:38dvh}
 }

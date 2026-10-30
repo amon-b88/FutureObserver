@@ -30,6 +30,22 @@
                 <select class="future-observer-identity-select"></select>
             </div>
             <div class="future-observer-row">
+                <label>内容量</label>
+                <select class="future-observer-richness-select">
+                    <option value="brief">精简</option>
+                    <option value="normal">标准</option>
+                    <option value="rich">丰富</option>
+                    <option value="epic">长篇</option>
+                </select>
+                <label>最大输出长度 <input id="future-observer-maxtokens" type="number" min="0" max="64000" step="500"> tokens</label>
+            </div>
+            <div class="future-observer-hint">
+                最大输出长度填 0 表示不指定。想要内容更充实，建议填 8000 左右；填太大可能被某些模型/接口拒绝，报错的话改小即可。
+            </div>
+            <div class="future-observer-row">
+                <label><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（让AI先列思路再写正文，更充实、更不雷同，但更慢更费字数；构思部分会被自动删掉）</label>
+            </div>
+            <div class="future-observer-row">
                 <label><input type="checkbox" id="future-observer-fab-toggle"> 显示悬浮球快捷入口</label>
             </div>
             <div class="future-observer-row">
