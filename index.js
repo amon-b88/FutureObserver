@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS = Object.freeze({
         apiKey: '',
         model: '',
         modelList: [], // 上次从端点获取到的可选模型列表，刷新页面后还在，不用每次重新获取
+        extraBody: '', // 附加请求参数（JSON），会合并进每次请求，用来传 temperature / reasoning_effort 之类
     }),
 });
 
@@ -572,15 +573,24 @@ ${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数�
     const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
     const voiceText = voices.map(v => `- ${v}`).join('\n');
 
+    const planMin = { brief: 300, normal: 500, rich: 800, epic: 1200 }[settings.richness] || 800;
     const planBlock = settings.planFirst !== false ? `
 
 【写作步骤——分两步】
-第一步：先在 <构思> 和 </构思> 两个标签之间做构思。这部分程序会自动删掉、读者看不到，所以请认真、详细地写，不必简洁，也不必遵守下面的输出格式：
-  1. 把剧情里值得被讨论的具体事件、细节、矛盾点、反常之处、尴尬之处列出来（至少8条）。
-  2. 设计 ${personaMin}～${personaMax} 位评论者：网名、身份、立场、说话习惯、他最在意的点。要彼此差异明显，包括立场对立的人。
-  3. 规划几条会吵起来的争论线、几个有意思的跑题/玩梗/脑补点，以及楼中楼里谁会接谁的话。
-  4. 核对上面"本次讨论焦点"是否都已经安排进去了。
-第二步：构思结束后，紧接着输出论坛正文，严格使用下面的输出格式。` : '';
+第一步：先输出 <构思> 和 </构思> 两个标签之间的构思。这部分程序会自动删掉、读者看不到，所以请写得充分、具体，不要偷懒：构思部分不少于 ${planMin} 字，绝对不能只写一两句话。请按下面的小标题逐项填写（构思里可以不遵守输出格式）：
+<构思>
+【可讨论的细节】至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。
+【评论者名单】${personaMin}～${personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。要彼此差异明显，包括立场对立的人。
+【争论线与互动】至少3条会吵起来的争论线，几个跑题/玩梗/脑补点，以及${skin.noReplies ? '谁会接谁的梗' : '楼中楼里谁会接谁的话'}。
+【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
+</构思>
+第二步：构思结束后，紧接着输出论坛正文，严格使用上面的输出格式。` : '';
+
+    // 格式提醒和"开始写"的提示放在整段提示词的最末尾（模型最容易照做的位置）
+    const formatReminder = `（格式提醒：论坛正文的每一行都必须以${skin.noReplies ? '“楼|”' : '“楼|”或“回|”'}开头${settings.weiboMode ? '，主贴行以“主贴|”开头' : ''}，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
+    const tail = settings.planFirst !== false
+        ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写论坛正文：\n<构思>`
+        : `${formatReminder}\n\n【观察者评论】`;
 
     return `你是"观察者论坛"。
 
@@ -620,12 +630,12 @@ ${angleText}
 【本次语言风格参考——挑几种分配给不同评论者，按身份适配，不必全用】
 ${voiceText}
 
-${formatBlock}${weiboBlock}${planBlock}
+${formatBlock}${weiboBlock}
 ${worldInfoBlock}${memoryBlock}
 【剧情片段】
 ${story}
 
-【观察者评论】`;
+${tail}`;
 }
 
 // opts.signal: 用于取消请求；opts.onChunk(textSoFar): 传了就走流式，边收边回调累计文字
@@ -644,15 +654,32 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     }
 
     const wantStream = typeof opts.onChunk === 'function';
+
+    // 附加请求参数：用户在设置里填的一段 JSON，原样合并进请求（messages 和 stream 不允许被覆盖）
+    let extra = {};
+    const extraText = String(apiConfig.extraBody || '').trim();
+    if (extraText) {
+        try {
+            extra = JSON.parse(extraText);
+        } catch {
+            throw new Error('“附加请求参数”不是合法的 JSON，请检查格式（例如 {"temperature": 0.9}）');
+        }
+        if (!extra || typeof extra !== 'object' || Array.isArray(extra)) {
+            throw new Error('“附加请求参数”必须是一个 JSON 对象，例如 {"temperature": 0.9}');
+        }
+    }
+
+    const messages = [{ role: 'user', content: prompt }];
     const response = await fetch(url, {
         method: 'POST',
         headers,
         signal: opts.signal,
         body: JSON.stringify({
             model: apiConfig.model || undefined,
-            messages: [{ role: 'user', content: prompt }],
-            stream: wantStream,
             ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
+            ...extra,
+            messages,
+            stream: wantStream,
         }),
     });
 
@@ -872,6 +899,11 @@ function adoptToInput(realName, content) {
 // 去掉"构思"部分（AI在写正文之前的草稿，读者不需要看到）
 function stripPlanBlock(rawText) {
     let t = String(rawText ?? '');
+    // 提示词是以"<构思>"结尾的，模型有时会接着往下写而不重复开头标签：有结束标签、前面没有开头标签，就把开头到结束标签都当构思
+    const closeAt = t.indexOf('</构思>');
+    if (closeAt >= 0 && !t.slice(0, closeAt).includes('<构思>')) {
+        t = t.slice(closeAt + '</构思>'.length);
+    }
     t = t.replace(/<构思>[\s\S]*?<\/构思>/g, '');
     t = t.replace(/<构思>[\s\S]*$/, ''); // 没写结束标签：说明输出在构思阶段就被截断了
     return t.trim();
@@ -885,7 +917,9 @@ function trimIncompleteTail(text) {
 }
 
 const RE_MAIN = /^(?:【主贴】|\[主贴\]|主贴)\s*([\s\S]*)$/;
-const RE_FLOOR_HEAD = /^(?:主?楼)\s*[|｜]\s*([\s\S]+)$/;
+const RE_FLOOR_HEAD = /^(?:主?楼层?)\s*[|｜]\s*([\s\S]+)$/;
+const RE_NUMBERED_PIPES = /^(\d+)\s*[|｜]\s*([\s\S]+)$/; // 漏写了开头的"楼|"，直接是 编号|网名|内容
+const RE_NAME_COLON = /^([^\s:：|｜]{1,20})\s*[:：]\s*(\S[\s\S]*)$/; // 彻底掉格式：网名：内容
 const RE_REPLY_HEAD = /^回(?:复)?\s*[|｜]\s*([\s\S]+)$/;
 const RE_LEGACY = /^(\d+)\s*楼\s*[-–—－]?\s*(.+?)\s*(?:回复\s*(\d+)\s*楼\s*)?[:：]\s*([\s\S]+)$/;
 const LEGACY_REPLY_MARK = /^[└╰↳→>＞»]+/;
@@ -935,8 +969,9 @@ function parseFloorFields(rest, isReply) {
     };
 }
 
-function parseForumText(text) {
-    const result = { mainPost: null, roots: [], flat: [], count: 0 };
+// loose=true：AI中途掉格式时的宽松模式，会把"网名：内容"、"编号|网名|内容"这样的行也当成新楼层
+function parseForumText(text, loose = false) {
+    const result = { mainPost: null, roots: [], flat: [], count: 0, mergedLines: 0 };
     const byNum = new Map();
     let last = null;
     let lastRoot = null;
@@ -972,6 +1007,10 @@ function parseForumText(text) {
         if (!trimmed) continue;
         let lead = trimmed.replace(/^[*`\s]+/, '');
         if (/^\*\*/.test(trimmed)) lead = lead.replace(/\*+\s*$/, '');
+        // 模型有时会加列表符号、编号，或者用【】/[]把整行包起来
+        lead = lead.replace(/^[-•·●▪‣]\s+/, '').replace(/^\d{1,3}[.、)）]\s*(?=[楼回主])/, '');
+        const wrapped = lead.match(/^[【\[]\s*((?:主?楼层?|回复?|主贴)\s*[|｜][\s\S]*?)\s*[】\]]$/);
+        if (wrapped) lead = wrapped[1];
         if (!lead) continue;
 
         let m = lead.match(RE_MAIN);
@@ -999,6 +1038,14 @@ function parseForumText(text) {
             if (f) { addItem({ kind: 'floor', ...f }); continue; }
         }
 
+        if (loose) {
+            m = lead.match(RE_NUMBERED_PIPES);
+            if (m) {
+                const f = parseFloorFields(m[0], false);
+                if (f) { addItem({ kind: 'floor', ...f }); continue; }
+            }
+        }
+
         const legacyText = lead.replace(/^[└╰↳→>＞»\-–—\s]+/, '');
         m = legacyText.match(RE_LEGACY);
         if (m) {
@@ -1018,9 +1065,27 @@ function parseForumText(text) {
         if (!/[\p{L}\p{N}]/u.test(lead)) continue;
         if (/^<\/?[^>]{1,30}>$/.test(lead)) continue;
         if (/^[-=_~—]{3,}$/.test(lead)) continue;
-        if (last) last.content += '\n' + lead;
+        if (loose && last && result.count > 0) {
+            const nc = lead.match(RE_NAME_COLON);
+            if (nc) {
+                const prevNum = Number.isFinite(last.num) ? last.num : result.count;
+                addItem({ kind: 'floor', num: prevNum + 1, replyTo: null, name: nc[1].trim(), likes: null, content: nc[2].trim() });
+                continue;
+            }
+        }
+        if (last) { last.content += '\n' + lead; result.mergedLines++; }
     }
     return result;
+}
+
+// 先按严格格式解析；如果发现大量行被"并进上一条"（说明AI中途掉格式了），就用宽松模式重新解析一遍
+function parseForumSmart(text) {
+    const strict = parseForumText(text, false);
+    if (strict.mergedLines >= 3 && strict.mergedLines > strict.count * 0.4) {
+        const loose = parseForumText(text, true);
+        if (loose.count > strict.count) return loose;
+    }
+    return strict;
 }
 
 // 网名是否就是主角（网名后面如果带括号标注，括号前面的部分才算）
@@ -1098,7 +1163,10 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
     const streaming = !!opts.streaming;
     const raw = String(rawText ?? '');
 
-    if (streaming && /<构思>/.test(raw) && !/<\/构思>/.test(raw)) {
+    // 开了"先构思"，且还没看到构思结束标签、也还没开始出现楼层行：说明还在构思阶段
+    const planMode = settings.planFirst !== false;
+    const hasFloorLine = /^[\s*]*(?:主贴|主?楼层?|回复?)\s*[|｜]/m.test(raw);
+    if (streaming && !/<\/构思>/.test(raw) && ((/<构思>/.test(raw)) || (planMode && !hasFloorLine))) {
         $el.text(`🧠 正在构思……（已写 ${raw.length} 字）`);
         return;
     }
@@ -1109,7 +1177,7 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
         if (streaming) {
             $el.text('✍️ 正在写……');
         } else {
-            $el.text(/<构思>/.test(raw)
+            $el.text(raw.trim() && (/<构思>/.test(raw) || planMode)
                 ? '输出在“构思”阶段就被截断了，没写到正文。请在设置里调大“最大输出长度”，或关掉“先构思再写”后重试。'
                 : '没有得到结果。');
         }
@@ -1119,7 +1187,7 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
     const skin = SKIN_SPECS[settings.skin] ? settings.skin : 'forum';
     const protagonist = getProtagonistName();
     const protagonistOn = !!settings.protagonistMode;
-    let parsed = parseForumText(text);
+    let parsed = parseForumSmart(text);
     if (!protagonistOn) parsed = dropProtagonist(parsed, protagonist);
 
     const adoptSource = []; // 与 data-fo-i 下标一一对应，用于事后挂"采纳"按钮
@@ -1137,6 +1205,12 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
         ? ' is-protagonist' : '');
 
     let html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
+
+    if (parsed.count === 0 && !parsed.mainPost && !streaming && planMode && !/<\/构思>/.test(raw)) {
+        // 开了先构思，却没有任何楼层、也没有构思结束标签：多半是输出在构思阶段被截断了
+        $el.text('没有识别到论坛格式的内容。可能是输出在“构思”阶段就被截断了（请调大“最大输出长度”），也可能是AI没按格式输出（点下方“查看AI原始输出”看看它写了什么）。');
+        return;
+    }
 
     if (parsed.count === 0 && !parsed.mainPost) {
         // 完全认不出格式：退回逐行显示（过滤掉空行和纯符号行）
@@ -1263,6 +1337,16 @@ function showHistoryAt(scopeKey, idx) {
     refreshHistoryNav();
 }
 
+// 在结果区底部加一个"查看AI原始输出"：格式出问题时，可以看到AI到底写了什么，复制出来排查
+function appendRawViewer($el, raw) {
+    const text = String(raw ?? '').trim();
+    if (!text) return;
+    const $wrap = $('<div class="future-observer-rawwrap"></div>');
+    $wrap.append('<span class="future-observer-rawtoggle">📄 查看AI原始输出（格式出问题时可复制出来排查）</span>');
+    $wrap.append($('<textarea class="future-observer-rawtext" readonly style="display:none;"></textarea>').val(text));
+    $el.append($wrap);
+}
+
 // 当前正在进行的一次生成（同一时间只允许一次）；取消按钮靠它找到要中断的东西
 let currentRun = null;
 const CANCELLED = Symbol('cancelled');
@@ -1381,10 +1465,12 @@ async function generateObservation() {
         run.finished = true;
         if (run.renderTimer) { clearTimeout(run.renderTimer); run.renderTimer = null; }
 
+        const rawOriginal = result || run.partial || ''; // 原始输出（含构思），供"查看原始输出"用
+
         if (run.cancelled) {
             // 取消：能保留多少保留多少（最后一行可能只写了一半，丢掉）
             const partial = cleanForumResult(trimIncompleteTail(result || run.partial));
-            const parsedPartial = parseForumText(partial);
+            const parsedPartial = parseForumSmart(partial);
             if (!parsedPartial.count && !parsedPartial.mainPost) {
                 resultBoxes.text('已取消。');
                 return;
@@ -1396,6 +1482,7 @@ async function generateObservation() {
         const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
             renderResultInto($(this), result, showAdopt);
+            appendRawViewer($(this), rawOriginal);
         });
         $('.future-observer-popup-result').scrollTop(0);
 
@@ -1410,7 +1497,7 @@ async function generateObservation() {
         refreshHistoryNav();
 
         if (settings.memoryEnabled) {
-            const parsed = parseForumText(cleaned);
+            const parsed = parseForumSmart(cleaned);
             await saveMemoryEntry(scopeKey, parsed.count ? forumToPlainText(parsed) : cleaned);
         }
     } finally {
@@ -1505,6 +1592,7 @@ function syncControlsFromSettings() {
     $('#future-observer-customapi-endpoint').val(settings.customApi?.endpoint || '');
     $('#future-observer-customapi-key').val(settings.customApi?.apiKey || '');
     $('#future-observer-customapi-model').val(settings.customApi?.model || '');
+    $('#future-observer-customapi-extra').val(settings.customApi?.extraBody || '');
     renderCustomApiModelSelect();
 }
 
@@ -1604,6 +1692,15 @@ function bindSharedControls() {
         const settings = getSettings();
         settings.protagonistName = String($(this).val() || '').trim();
         saveSettings();
+    });
+
+    $(document).off('click.futureObserverRaw').on('click.futureObserverRaw', '.future-observer-rawtoggle', function () {
+        const $ta = $(this).siblings('.future-observer-rawtext');
+        $ta.toggle();
+        if ($ta.is(':visible')) {
+            $ta.trigger('focus');
+            try { $ta.get(0).select(); } catch { /* 忽略 */ }
+        }
     });
 
     $(document).off('click.futureObserverCancel').on('click.futureObserverCancel', '.future-observer-cancel-btn', cancelGeneration);
@@ -1735,6 +1832,21 @@ function bindSharedControls() {
     $('#future-observer-customapi-key').off('change').on('change', function () {
         const settings = getSettings();
         settings.customApi.apiKey = String($(this).val()).trim();
+        saveSettings();
+    });
+
+    $('#future-observer-customapi-extra').off('change').on('change', function () {
+        const settings = getSettings();
+        const text = String($(this).val() || '').trim();
+        if (text) {
+            try {
+                const obj = JSON.parse(text);
+                if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('not object');
+            } catch {
+                toastr.warning('附加请求参数不是合法的 JSON 对象，已保存，但生成时会报错，请检查。', '观察者论坛');
+            }
+        }
+        settings.customApi.extraBody = text;
         saveSettings();
     });
 

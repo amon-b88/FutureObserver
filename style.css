@@ -545,3 +545,23 @@
 }
 .future-observer-skin-danmaku .future-observer-mainpost,
 .future-observer-skin-danmaku .future-observer-streaming{flex:1 1 100%}
+
+/* 原始输出查看器 + 附加请求参数输入框 */
+.future-observer-rawwrap{margin-top:12px}
+.future-observer-rawtoggle{font-size:.78em;opacity:.55;cursor:pointer;text-decoration:underline dotted}
+.future-observer-rawtoggle:hover{opacity:.9}
+.future-observer-rawtext{
+    display:block;
+    width:100%;
+    min-height:160px;
+    margin-top:6px;
+    padding:8px 10px;
+    font-size:.8em;
+    line-height:1.5;
+    border-radius:8px;
+    border:1px solid rgba(127,127,127,.3);
+    background:rgba(0,0,0,.18);
+    color:inherit;
+    resize:vertical;
+}
+.future-observer-customapi-extra{flex:1;min-width:200px;font-family:monospace;font-size:.85em}
