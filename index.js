@@ -361,6 +361,9 @@ const RICHNESS_OPTIONS = [
     { value: 'epic', label: '长篇' },
 ];
 
+// 构思部分要求的最少字数（写进提示词；生成后也拿它来判断这次构思是不是偏短）
+const PLAN_MIN_CHARS = { brief: 300, normal: 500, rich: 800, epic: 1200 };
+
 const RICHNESS_SPECS = {
     brief: {
         floors: [7, 10], replies: [2, 4], personas: [6, 8], angles: 3,
@@ -573,7 +576,7 @@ ${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数�
     const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
     const voiceText = voices.map(v => `- ${v}`).join('\n');
 
-    const planMin = { brief: 300, normal: 500, rich: 800, epic: 1200 }[settings.richness] || 800;
+    const planMin = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
     const planBlock = settings.planFirst !== false ? `
 
 【写作步骤——分两步】
@@ -1338,11 +1341,30 @@ function showHistoryAt(scopeKey, idx) {
 }
 
 // 在结果区底部加一个"查看AI原始输出"：格式出问题时，可以看到AI到底写了什么，复制出来排查
+// 量一下AI这次写的构思有多少字（没写完/没写返回 null）
+function measurePlanLength(raw) {
+    const t = String(raw ?? '');
+    const close = t.indexOf('</构思>');
+    if (close < 0) return null;
+    let body = t.slice(0, close);
+    const open = body.indexOf('<构思>');
+    if (open >= 0) body = body.slice(open + '<构思>'.length);
+    return body.trim().length;
+}
+
 function appendRawViewer($el, raw) {
     const text = String(raw ?? '').trim();
     if (!text) return;
+    let label = '📄 查看AI原始输出（格式出问题时可复制出来排查）';
+    const settings = getSettings();
+    if (settings.planFirst !== false) {
+        const planLen = measurePlanLength(text);
+        const need = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
+        if (planLen === null) label = '📄 查看AI原始输出（没有找到完整的构思）';
+        else label = `📄 查看AI原始输出（构思 ${planLen} 字${planLen < need * 0.6 ? `，要求不少于 ${need}，偏短` : ''}）`;
+    }
     const $wrap = $('<div class="future-observer-rawwrap"></div>');
-    $wrap.append('<span class="future-observer-rawtoggle">📄 查看AI原始输出（格式出问题时可复制出来排查）</span>');
+    $wrap.append($('<span class="future-observer-rawtoggle"></span>').text(label));
     $wrap.append($('<textarea class="future-observer-rawtext" readonly style="display:none;"></textarea>').val(text));
     $el.append($wrap);
 }
