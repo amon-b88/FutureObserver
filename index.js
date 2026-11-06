@@ -362,7 +362,41 @@ const RICHNESS_OPTIONS = [
 ];
 
 // 构思部分要求的最少字数（写进提示词；生成后也拿它来判断这次构思是不是偏短）
-const PLAN_MIN_CHARS = { brief: 300, normal: 500, rich: 800, epic: 1200 };
+// 构思越深，后面的正文越舍得展开（实测构思三千多字时，正文能写到六千字），所以最低字数设得比较高
+const PLAN_MIN_CHARS = { brief: 400, normal: 800, rich: 1400, epic: 2200 };
+
+// 每档的"长短评分布"：short/mid/long 三种长度各自的字数范围，mix 是三者的占比
+const LENGTH_TIERS = {
+    brief:  { short: [20, 50], mid: [60, 110],  long: [120, 200], mix: [0.3, 0.5, 0.2] },
+    normal: { short: [20, 50], mid: [70, 130],  long: [150, 260], mix: [0.3, 0.4, 0.3] },
+    rich:   { short: [20, 50], mid: [80, 160],  long: [200, 350], mix: [0.2, 0.4, 0.4] },
+    epic:   { short: [20, 60], mid: [100, 200], long: [250, 450], mix: [0.2, 0.3, 0.5] },
+};
+
+function randInt(min, max) {
+    return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+// 由代码给每一条主楼随机分配"长评/中评/短评"和具体字数，写成一张表交给AI照着写。
+// 比"约四成是长评"这种笼统的比例更不容易被AI偷懒缩水成一两句话。
+function buildLengthTable(count, richness) {
+    const t = LENGTH_TIERS[richness] || LENGTH_TIERS.rich;
+    const nShort = Math.round(count * t.mix[0]);
+    const nLong = Math.round(count * t.mix[2]);
+    const nMid = Math.max(0, count - nShort - nLong);
+    const tiers = [
+        ...Array(nShort).fill('short'),
+        ...Array(nMid).fill('mid'),
+        ...Array(nLong).fill('long'),
+    ];
+    const order = pickRandom(tiers, tiers.length); // 打乱，长评短评穿插
+    const label = { short: '短评', mid: '中评', long: '长评' };
+    return order.map((tier, i) => {
+        const [lo, hi] = t[tier];
+        const target = Math.round(randInt(lo, hi) / 10) * 10;
+        return `第${i + 1}条主楼：${label[tier]}，约${target}字`;
+    }).join('\n');
+}
 
 const RICHNESS_SPECS = {
     brief: {
@@ -509,6 +543,10 @@ async function buildPrompt(story) {
     const replyMax = skin.noReplies ? 0 : Math.max(replyMin, Math.round(spec.replies[1] * skin.replyMul));
     const hotOn = !!settings.hotComments && skin.hotAllowed;
     const protagonist = getProtagonistName();
+    const floorCount = randInt(floorMin, floorMax); // 这一次具体要写多少条主楼，由代码定，不让AI自己挑
+    const replyCount = skin.noReplies ? 0 : randInt(replyMin, replyMax);
+    const useLengthTable = !skin.lengthText;
+    const lengthTable = useLengthTable ? buildLengthTable(floorCount, settings.richness) : '';
     const [personaMin, personaMax] = spec.personas;
     const angles = pickRandom(DISCUSSION_ANGLES, spec.angles);
     const voices = pickRandom(VOICE_STYLES, 5);
@@ -585,7 +623,7 @@ ${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数�
 【可讨论的细节】至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。
 【评论者名单】${personaMin}～${personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。要彼此差异明显，包括立场对立的人。
 【争论线与互动】至少3条会吵起来的争论线，几个跑题/玩梗/脑补点，以及${skin.noReplies ? '谁会接谁的梗' : '楼中楼里谁会接谁的话'}。
-【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
+${useLengthTable ? '【逐楼提纲】按上面的字数分配表，为每一条主楼各写一行：第几条｜网名｜针对剧情里哪个具体细节｜立场｜准备说的 2～3 个要点（长评要写出论证的层次，说清先说什么、再说什么、最后落在哪）。\n' : ''}【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
 </构思>
 第二步：构思结束后，紧接着输出论坛正文，严格使用上面的输出格式。` : '';
 
@@ -616,8 +654,12 @@ ${skin.promptText ? '\n' + skin.promptText + '\n' : ''}
 8. 最后不要总结，不要解释生成过程。
 
 【数量与长度】
-- 生成 ${floorMin}～${floorMax} 条主楼评论${skin.noReplies ? '' : `；另外再写 ${replyMin}～${replyMax} 条楼中楼跟帖（跟帖不算在主楼数量里）`}。
-- ${skin.lengthText ? '字数安排：' + skin.lengthText : '字数要有明显起伏，不要每条都差不多长：' + spec.lengthText}。
+- 生成 ${floorCount} 条主楼评论${skin.noReplies ? '' : `；另外再写 ${replyCount} 条左右的楼中楼跟帖（跟帖不算在主楼数量里）`}。
+${useLengthTable
+    ? `- 下面是程序随机分配的字数分配表，请严格按表写每一条主楼：标"长评"的必须真的写到约定字数（有具体论证、细节、前因后果，不能用一两句话敷衍），只有标"短评"的才可以一两句话。主楼的发布顺序就按表里的顺序。
+${lengthTable}
+- 跟帖以一两句话为主（20～80字），其中 1～2 条可以展开写（100～200字）。`
+    : `- 字数安排：${skin.lengthText}。`}
 
 【质量要求——避免千篇一律】
 - 每条评论至少抓住剧情里的一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
