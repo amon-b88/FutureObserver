@@ -565,3 +565,62 @@
     resize:vertical;
 }
 .future-observer-customapi-extra{flex:1;min-width:200px;font-family:monospace;font-size:.85em}
+
+/* ==================== 多帖论坛：帖子列表 / 帖子详情 ==================== */
+.future-observer-postlist{gap:10px}
+.future-observer-postcard{
+    padding:12px 14px;
+    border-radius:14px;
+    background:rgba(127,127,127,.09);
+    border:1px solid rgba(127,127,127,.14);
+    cursor:pointer;
+    transition:transform .12s ease, background .15s ease;
+}
+.future-observer-postcard:hover{background:rgba(var(--fo-accent),.12)}
+.future-observer-postcard:active{transform:scale(.985)}
+.future-observer-postcard.is-hot{
+    border-color:rgba(var(--fo-accent),.5);
+    background:linear-gradient(140deg, rgba(var(--fo-accent),.16), rgba(127,127,127,.07));
+}
+.future-observer-postcard.is-protagonist{box-shadow:inset 3px 0 0 rgb(var(--fo-accent))}
+.future-observer-postcard-top{display:flex;align-items:center;gap:6px;margin-bottom:5px;min-height:0}
+.future-observer-postcard-top:empty{display:none}
+.future-observer-postcard-title{font-weight:700;font-size:1em;line-height:1.5;overflow-wrap:anywhere}
+.future-observer-postcard-snippet{
+    margin-top:4px;
+    font-size:.86em;
+    line-height:1.6;
+    opacity:.65;
+    overflow-wrap:anywhere;
+}
+.future-observer-postcard-meta{
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    margin-top:8px;
+    font-size:.8em;
+}
+.future-observer-postcard-meta .future-observer-name{font-size:1em}
+.future-observer-comments-count{margin-left:auto;opacity:.6;white-space:nowrap}
+
+.future-observer-postdetail{gap:10px}
+.future-observer-postback{
+    align-self:flex-start;
+    padding:4px 12px;
+    font-size:.85em;
+    border-radius:999px;
+    border:1px solid rgba(127,127,127,.3);
+    background:rgba(127,127,127,.1);
+    color:inherit;
+    cursor:pointer;
+}
+.future-observer-postback:hover{background:rgba(var(--fo-accent),.18)}
+.future-observer-posthead{
+    padding:13px 15px;
+    border-radius:15px;
+    background:linear-gradient(140deg, rgba(var(--fo-accent),.2), rgba(var(--fo-accent),.06));
+    border:1px solid rgba(var(--fo-accent),.4);
+}
+.future-observer-posthead-top{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
+.future-observer-posttitle{font-weight:700;font-size:1.05em;line-height:1.55;margin-bottom:8px;overflow-wrap:anywhere}
+.future-observer-empty{font-size:.85em;opacity:.55;text-align:center;padding:14px 0}

@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     maxChars: 14000,
     richness: 'rich', // 内容量：'brief' | 'normal' | 'rich' | 'epic'
     planFirst: true, // 先构思再写正文（更充实，更耗时；构思部分会被自动删掉）
+    forumMode: 'thread', // 形式：'thread' 评论区（一个帖子）| 'forum' 多帖论坛（帖子列表，点进去看回复）
     skin: 'forum', // 载体：'forum' | 'news' | 'chat' | 'danmaku'
     hotComments: false, // 热评：给评论标赞数，热门的置顶（仅论坛/新闻载体）
     protagonistMode: false, // 主角是否参与讨论；关闭时主角不会出现在评论里
@@ -146,9 +147,9 @@ function buildFandomIdentityText(work, isSameWorld) {
         : '没有指定具体作品，请你自由选取几部大众熟悉的动漫、游戏、电影等作品里的角色来评论，可以混搭多个不同作品的角色，这种情况下角色之间不需要有原作关系，正常当作互不相干的路人网友处理即可。';
 
     const base = `每个评论者是来自其他虚构作品（动漫、游戏、电影、小说等）的角色，模仿这些角色本身的性格、语气、口头禅去点评这段剧情。${scope}
-评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，网名部分的写法例如：
-楼|1|疾风影帝（漩涡鸣人）|这忍术用得也太糙了吧……
-楼|3|桃芝丽庄园主（罗宾）|有点意思，这段历史我要记下来。
+评论者的网名要贴合该角色的性格/身份设计（可以中二、可以霸气、可以搞笑），并且必须在网名后面用括号标注这个角色的真实姓名，方便认出是谁，网名（by 属性）的写法例如：
+<c n="1" by="疾风影帝（漩涡鸣人）">这忍术用得也太糙了吧……</c>
+<c n="3" by="桃芝丽庄园主（罗宾）">有点意思，这段历史我要记下来。</c>
 这条"网名+括号真名"的格式规则，只在这个同人模式下使用。
 如果某位评论者提到"要来帮忙""要送/给点什么"这类实际行动，所提供的帮助/物品力度要匹配这个角色在原作里真实的身份地位和能力等级（比如战力顶尖的强者，就不该随口说要送一把普通铁剑这种不符身份的东西），同时也要考虑别让这类帮助严重打破当前故事本身的剧情节奏和强度平衡。`;
 
@@ -170,11 +171,12 @@ function buildFandomIdentityText(work, isSameWorld) {
 function getMemoryScopeKey(settings) {
     const direction = settings.timeDirection;
     const identity = settings.identity;
+    const suffix = settings.forumMode === 'forum' ? ':forum' : ''; // 多帖论坛和评论区各记各的
     if (direction === 'otherworld' && identity === 'fandom') {
         const work = String(settings.fandomWork || '').trim();
-        return work ? `otherworld:fandom:${work}` : 'otherworld:fandom:random';
+        return (work ? `otherworld:fandom:${work}` : 'otherworld:fandom:random') + suffix;
     }
-    return `${direction}:${identity}`;
+    return `${direction}:${identity}${suffix}`;
 }
 
 // 记忆存取：绑定在"当前聊天"本身（chatMetadata），不是全局设置，切换聊天/角色会自动换成对应那条。
@@ -532,6 +534,169 @@ async function getWorldInfoText() {
     }
 }
 
+// ==================== 多帖论坛模式 ====================
+// 评论区模式：围绕这一段剧情的一个评论区。
+// 多帖论坛模式：一次生成好几个不同主题的帖子（版块、标题、楼主正文、各自的回复），点进帖子才看到回复。
+// 一次调用生成更多内容，所以按次计费时更划算，但需要更大的"最大输出长度"。
+const FORUM_MODE_OPTIONS = [
+    { value: 'thread', label: '评论区（一个帖子）' },
+    { value: 'forum', label: '多帖论坛（帖子列表）' },
+];
+
+const FORUM_SPECS = {
+    brief:  { posts: [3, 4],  comments: [2, 5],  body: [60, 120],  cmt: [30, 100] },
+    normal: { posts: [4, 6],  comments: [3, 7],  body: [80, 180],  cmt: [40, 140] },
+    rich:   { posts: [5, 8],  comments: [4, 9],  body: [100, 260], cmt: [50, 200] },
+    epic:   { posts: [6, 9],  comments: [5, 10], body: [150, 350], cmt: [60, 260] },
+};
+
+const POST_TYPES_PLOT = [
+    '剧情直接讨论（这段剧情里的某个关键事件）',
+    '细节考据（抓一个很小的细节认真分析）',
+    '人物吐槽（某个角色这波操作）',
+    '预测后续（接下来会怎样）',
+    '求助提问（有人没看懂剧情里的某件事）',
+    '争议投票（A还是B，吵起来）',
+    '复盘总结（梳理前因后果）',
+];
+const POST_TYPES_WORLD = [
+    '世界冷知识/科普（和这个世界观相关）',
+    '八卦传闻（必须明确标出是传闻）',
+    '同人脑洞/段子（和这个世界相关）',
+    '论坛日常（水帖、签到、吐槽论坛本身，但要带这个世界的色彩）',
+    '经验/攻略（这个世界里的人会关心的实用话题）',
+];
+
+function pickCycle(list, n) {
+    const out = [];
+    while (out.length < n) out.push(...pickRandom(list, Math.min(list.length, n - out.length)));
+    return out;
+}
+
+// 由代码给每个帖子分配：类型、热度、楼主正文字数、回复条数。比让AI自己决定更不容易千篇一律或缩水。
+function buildPostTable(count, richness) {
+    const f = FORUM_SPECS[richness] || FORUM_SPECS.rich;
+    const plotN = Math.max(1, Math.round(count * 0.6));
+    const types = pickRandom([...pickCycle(POST_TYPES_PLOT, plotN), ...pickCycle(POST_TYPES_WORLD, count - plotN)], count);
+    const hotN = Math.max(1, Math.round(count * 0.3));
+    const coldN = count >= 4 ? Math.max(1, Math.round(count * 0.2)) : 0;
+    const heats = pickRandom([
+        ...Array(hotN).fill('热帖'),
+        ...Array(coldN).fill('冷帖'),
+        ...Array(Math.max(0, count - hotN - coldN)).fill('普通帖'),
+    ], count);
+    const [cMin, cMax] = f.comments;
+    const mid = Math.ceil((cMin + cMax) / 2);
+    return types.map((type, i) => {
+        const heat = heats[i];
+        const replies = heat === '热帖' ? randInt(mid, cMax) : heat === '冷帖' ? randInt(0, 2) : randInt(cMin, mid);
+        const body = Math.round(randInt(f.body[0], f.body[1]) / 10) * 10;
+        const longLen = Math.round(randInt(Math.round(f.cmt[1] * 0.6), f.cmt[1]) / 10) * 10;
+        const shortHi = Math.max(f.cmt[0] + 10, Math.round(f.cmt[1] * 0.4 / 10) * 10);
+        const note = replies >= 4
+            ? `，其中1～2条写长一点（约${longLen}字），其余约${f.cmt[0]}～${shortHi}字`
+            : replies > 0 ? `，每条约${f.cmt[0]}～${shortHi}字` : '';
+        return `第${i + 1}帖｜${type}｜${heat}｜楼主正文约${body}字｜回复约${replies}条${note}`;
+    }).join('\n');
+}
+
+// 多帖论坛模式的完整提示词。公共部分（身份、世界书、记忆、讨论焦点等）由 buildPrompt 算好传进来。
+function buildForumPromptText(e) {
+    const { settings, direction, identityText, protagonist, memoryBlock, worldInfoBlock, angleText, voiceText, planMin, personaMin, personaMax, story } = e;
+    const f = FORUM_SPECS[settings.richness] || FORUM_SPECS.rich;
+    const hotOn = !!settings.hotComments;
+    const postCount = randInt(f.posts[0], f.posts[1]);
+    const table = buildPostTable(postCount, settings.richness);
+    const likeAttr = hotOn ? ' like="赞数"' : '';
+
+    let protagonistBlock = '';
+    if (protagonist) {
+        protagonistBlock = settings.protagonistMode
+            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在这个论坛里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（发帖和回复合计），而且不能连续两次都是他。\n- 每次发言二选一：在某个帖子里发表自己对这件事的感想；或者回复某个具体的人（用 to 属性指明回复的是哪一条）。他自己发帖也行，但最多一个。\n- 不要每个帖子都出现他，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
+            : `\n\n【主角回避】\n故事的主角是「${protagonist}」。论坛里不得出现主角本人（既不能发帖也不能回复），也不要以他的身份或口吻发言；帖子和回复里需要提到他时，只能以第三方的口吻谈论他。`;
+    }
+
+    const likeExamples = hotOn ? ['256', '31', '4'] : [null, null, null];
+    const ex = (v) => (v ? ` like="${v}"` : '');
+    const formatBlock = `【输出格式——必须严格遵守，程序靠这个格式识别帖子和楼层】
+论坛由多个帖子组成，每个帖子用 <post> 标签包起来，结构固定如下：
+<post id="1" board="版块名" by="楼主网名"${ex(likeExamples[0])}>
+<title>帖子标题</title>
+<body>楼主正文</body>
+<c n="1" by="网名"${ex(likeExamples[1])}>回复内容</c>
+<c n="2" to="1" by="网名"${ex(likeExamples[2])}>对1楼的回复内容</c>
+</post>
+- 帖子之间不要写任何别的文字。每个帖子的回复编号 n 从 1 开始连续递增（每个帖子重新从 1 算起）；to 只在回复某一条回复时才写，填被回复那一条的编号（可以是楼主下的第一层回复，也可以是另一条跟帖）。
+- 版块名由你根据这个世界观自拟（比如剧情讨论、八卦区、考据区、水区之类），同一个版块可以出现多次。
+${hotOn ? '- 赞数是纯整数，帖子和回复都要标。分布要像真实论坛：热帖几百到几千，普通帖几十，冷帖个位数；回复的赞数一般比帖子低，吵得凶的、有梗的、有洞察的更高。\n' : ''}- 属性值一律用英文双引号，网名和标题里不要出现双引号和 < > 符号；正文和回复里不要出现 </c>、</post> 这样的标签文字。
+- 楼主正文和回复内容可以分段换行，但必须全部写在对应的标签里面。
+- 除了这些标签，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
+
+    const planBlock = settings.planFirst !== false ? `
+
+【写作步骤——分两步】
+第一步：先输出 <构思> 和 </构思> 两个标签之间的构思。这部分程序会自动删掉、读者看不到，所以请写得充分、具体，不要偷懒：构思部分不少于 ${planMin} 字，绝对不能只写一两句话。请按下面的小标题逐项填写（构思里可以不遵守输出格式）：
+<构思>
+【可讨论的细节】至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。
+【帖子策划】按上面的帖子分配表，为每个帖子各写一行：第几帖｜版块｜标题（要像真实论坛标题，可以标题党）｜楼主网名与身份｜楼主想说的 2～3 个要点｜这个帖子下会吵起来的点。
+【评论者名单】${personaMin}～${personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。同一位评论者可以在不同帖子里反复出现（网名和人设要保持一致），立场对立的人要有。
+【互动线】每个帖子里谁会反驳谁、谁会接谁的梗、谁会把话题带偏。
+【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
+</构思>
+第二步：构思结束后，紧接着输出所有帖子，严格使用上面的输出格式。` : '';
+
+    const formatReminder = '（格式提醒：全部内容必须用 <post>…</post> 包住每个帖子，帖子里用 <title>、<body> 和 <c>…</c> 标签，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）';
+    const tail = settings.planFirst !== false
+        ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写所有帖子：\n<构思>`
+        : `${formatReminder}\n\n【观察者论坛】`;
+
+    return `你是"观察者论坛"。
+
+【时间背景】
+${DIRECTION_TEXT[direction]}
+
+【评论者身份】
+${identityText}
+
+请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一个与当前主线完全分离的"观察者论坛"：它不是单一的评论区，而是一个有多个帖子的论坛首页。
+
+【严格规则】
+1. 这不是主线续写，不得继续当前剧情。
+2. 这个论坛不会被当前任何角色看到，不得改变当前世界状态。
+3. 不得把帖子和评论中的推测当成事实，也不得凭空补充关键剧情；传闻、八卦必须明确标出是传闻。
+4. 可以出现误解、争论、玩梗、不同立场；发言者可以理解错，但不要让所有人都同一种看法。
+5. 大约六成的帖子直接围绕这段剧情中真正发生的事件、人物行为和结果；其余帖子是这个世界里与之相关的其他话题或论坛日常，要和这个世界观相容。
+6. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则发言者之间身份要有明显差异。
+7. 不要出现"作为AI""提示词""主线"等元话语。
+8. 最后不要总结，不要解释生成过程。
+
+【数量与分配】
+- 生成 ${postCount} 个帖子。下面是程序随机分配的帖子分配表，请严格按表写：类型、热度、楼主正文字数、回复条数都要达到，标"热帖"的要热闹（回复多、有人吵起来），标"冷帖"的就是没几个人理。每个帖子的回复要有长有短，不要都是一两句话。帖子的先后顺序就按表里的顺序。
+${table}
+
+【质量要求——避免千篇一律】
+- 每个帖子的标题要像真实论坛里会有的标题，各不相同，不要都是"关于……的讨论"。
+- 每个帖子和回复至少抓住一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
+- 不要每条都走"先复述剧情→再表态→再总结升华"的三段式；不要用"这或许就是……""这正是……的意义"这类金句或升华来收尾；少用排比、对仗这类整齐的句子。
+- 每位发言者要有自己的说话习惯、关心的点和立场，不要所有人用同样的句式和语气。
+- 帖子下面要有互动：有人点名反驳、有人接梗、有人被带偏，还可以出现回复回复。
+- 同一个开头词或口头禅，整个论坛里最多出现两次。
+- 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。${protagonistBlock}
+
+【本次讨论焦点——由程序随机指定，务必每一条都有人谈到】
+${angleText}
+
+【本次语言风格参考——挑几种分配给不同发言者，按身份适配，不必全用】
+${voiceText}
+
+${formatBlock}
+${worldInfoBlock}${memoryBlock}
+【剧情片段】
+${story}
+
+${tail}`;
+}
+
 async function buildPrompt(story) {
     const settings = getSettings();
     const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
@@ -568,8 +733,8 @@ async function buildPrompt(story) {
 
 【微博体规则】
 - 先由评论者里的某一位发一条抓眼球的"主贴"，标题党风格（比如"讨论……""震惊……""只有我觉得……"这种开头），用一两句话说出一个具体、有态度的观点或角度，而不是泛泛复述剧情。
-- 主贴单独一行，放在所有楼层之前，用下面这个固定格式（方便程序识别，务必照抄，不要变化）：
-主贴|某某|只有我觉得他这波操作离谱吗？
+- 主贴放在所有评论之前，用下面这个固定格式（方便程序识别，务必照抄，不要变化）：
+<main by="某某">只有我觉得他这波操作离谱吗？</main>
 - 之后所有的主楼评论和跟帖，都必须针对这条主贴提出的具体观点来回应（赞同、反驳、追问、玩梗），不要各自评论剧情里不相关的别的地方。
 - 楼层编号从主贴之后的第一条评论开始算1楼，主贴本身不算入楼层编号。` : '';
 
@@ -593,23 +758,23 @@ ${lastMemory}
     let protagonistBlock = '';
     if (protagonist) {
         protagonistBlock = settings.protagonistMode
-            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在评论者里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（主楼和跟帖合计），而且不能连续两条都是他。\n- 每次发言二选一：发表自己对这件事的感想；或者回复论坛里某个具体的人${skin.noReplies ? '（此载体没有跟帖，直接在内容里点名对方）' : '（用"回|"格式，并填对被回复的楼层编号）'}。\n- 不要每条评论都去回复，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
+            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在评论者里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（主楼和跟帖合计），而且不能连续两条都是他。\n- 每次发言二选一：发表自己对这件事的感想；或者回复论坛里某个具体的人${skin.noReplies ? '（此载体没有跟帖，直接在内容里点名对方）' : '（用 to 属性指明回复的是哪一条楼层编号）'}。\n- 不要每条评论都去回复，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
             : `\n\n【主角回避】\n故事的主角是「${protagonist}」。评论者里不得出现主角本人，也不要以他的身份或口吻发言；评论里需要提到他时，只能以第三方的口吻谈论他。`;
     }
 
-    const likeField = hotOn ? '赞数|' : '';
-    const likeEx = hotOn ? ['128|', '9|', '2315|', '41|', '0|'] : ['', '', '', '', ''];
+    const likeAttr = (v) => (hotOn ? ` like="${v}"` : '');
     const formatLines = skin.noReplies
-        ? [`楼|1|某某|${likeEx[0]}……`, `楼|2|某某|${likeEx[1]}……`, `楼|3|某某|${likeEx[2]}……`]
-        : [`楼|1|某某|${likeEx[0]}……`, `楼|2|某某|${likeEx[1]}……`, `回|3|2|某某|${likeEx[2]}……`, `回|4|3|某某|${likeEx[3]}……`, `楼|5|某某|${likeEx[4]}……`];
+        ? [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" by="某某"${likeAttr(2315)}>……</c>`]
+        : [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" to="2" by="某某"${likeAttr(2315)}>……</c>`, `<c n="4" to="3" by="某某"${likeAttr(41)}>……</c>`, `<c n="5" by="某某"${likeAttr(0)}>……</c>`];
     const formatBlock = `【输出格式——必须严格遵守，程序靠这个格式识别楼层】
-每条评论单独占一行（评论里需要分段时，用空格或"／"代替换行，不要在一条评论中间换行），格式固定为：
-主楼：楼|楼层编号|网名|${likeField}评论内容${skin.noReplies ? '' : `\n跟帖：回|楼层编号|被回复的楼层编号|网名|${likeField}评论内容`}
+每条评论用一对 <c> 标签包起来，格式固定为：
+主楼：<c n="楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>${skin.noReplies ? '' : `\n跟帖：<c n="楼层编号" to="被回复的楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>`}
 示例：
 ${formatLines.join('\n')}
-- 楼层编号从1开始连续递增${skin.noReplies ? '' : '，主楼和跟帖共用同一个编号序列；跟帖里的"被回复的楼层编号"填它回应的那一楼（可以是主楼，也可以是另一条跟帖）'}。
-${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数很高（几百到几千），大多数只有个位数到几十，个别是0；赞数要和评论的质量、争议度、梗的好笑程度相符——吵得凶的、有洞察的、有梗的更高；跟帖的赞数一般比主楼低。\n' : ''}- 竖线 | 只用来分隔字段，评论内容和网名里都不要再出现竖线。
-- 除了这些格式行，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
+- n 从1开始连续递增${skin.noReplies ? '' : '，主楼和跟帖共用同一个编号序列；跟帖的 to 填它回应的那一楼的编号（可以是主楼，也可以是另一条跟帖）'}。
+${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数很高（几百到几千），大多数只有个位数到几十，个别是0；赞数要和评论的质量、争议度、梗的好笑程度相符——吵得凶的、有洞察的、有梗的更高；跟帖的赞数一般比主楼低。\n' : ''}- 属性值一律用英文双引号，网名里不要出现双引号和 < > 符号；评论内容里不要出现 </c> 这样的标签文字。
+- 评论内容可以分段换行，但必须全部写在这一对 <c> 标签里面。
+- 除了这些标签，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
 
     const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
     const voiceText = voices.map(v => `- ${v}`).join('\n');
@@ -627,8 +792,16 @@ ${useLengthTable ? '【逐楼提纲】按上面的字数分配表，为每一条
 </构思>
 第二步：构思结束后，紧接着输出论坛正文，严格使用上面的输出格式。` : '';
 
+    if (settings.forumMode === 'forum') {
+        // 多帖论坛模式：用另一套提示词（公共的素材在上面已经算好）
+        return buildForumPromptText({
+            settings, direction, identityText, protagonist, memoryBlock, worldInfoBlock,
+            angleText, voiceText, planMin, personaMin, personaMax, story,
+        });
+    }
+
     // 格式提醒和"开始写"的提示放在整段提示词的最末尾（模型最容易照做的位置）
-    const formatReminder = `（格式提醒：论坛正文的每一行都必须以${skin.noReplies ? '“楼|”' : '“楼|”或“回|”'}开头${settings.weiboMode ? '，主贴行以“主贴|”开头' : ''}，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
+    const formatReminder = `（格式提醒：论坛正文必须全部用 <c n=… by=…>…</c> 标签写${settings.weiboMode ? '，主贴用 <main by=…>…</main>' : ''}，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
     const tail = settings.planFirst !== false
         ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写论坛正文：\n<构思>`
         : `${formatReminder}\n\n【观察者评论】`;
@@ -1133,6 +1306,172 @@ function parseForumSmart(text) {
     return strict;
 }
 
+// 取消生成时，把最后一个没写完的标签（以及它后面的内容）整段丢掉，只保留到最后一个结束标签为止
+function trimToLastCloseTag(text) {
+    const src = String(text ?? '');
+    const re = /<\/(?:c|title|body|post|main)>/gi;
+    let end = -1;
+    let m;
+    while ((m = re.exec(src))) end = m.index + m[0].length;
+    return end < 0 ? '' : src.slice(0, end);
+}
+
+// ==================== 标签格式解析（新） ====================
+// 提示词现在要求AI用成对的标签输出：
+//   评论区模式：  <c n="1" by="网名" like="128">内容</c>        跟帖多一个 to="被回复的编号"
+//   微博体主贴：  <main by="网名">内容</main>
+//   多帖论坛模式：<post id="1" board="版块" by="楼主" like="256"><title>…</title><body>…</body><c …>…</c></post>
+// 比用竖线分隔的行更结实：内容里可以有竖线和换行；没写完的标签一眼就能识别并丢掉；跟帖明确知道回复的是哪一条。
+
+const TAG_TOKEN_RE = /<(\/?)(post|title|body|main|c)\b([^>]*)>/gi;
+
+function parseTagAttrs(str) {
+    const attrs = {};
+    const re = /([A-Za-z_][\w-]*)\s*=\s*(?:"([^"]*)"|“([^”]*)”|'([^']*)'|「([^」]*)」|([^\s"'>]+))/g;
+    let m;
+    while ((m = re.exec(str))) {
+        attrs[m[1].toLowerCase()] = String(m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? '').trim();
+    }
+    return attrs;
+}
+
+function cleanTagContent(s) {
+    return String(s ?? '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/?(?:post|title|body|main|c)\b[^>]*>/gi, '')
+        .replace(/\r\n?/g, '\n')
+        .replace(/^\s*\n+|\n+\s*$/g, '')
+        .trim();
+}
+
+// 把一串评论记录 [{num, replyTo, name, likes, content}] 按先后顺序挂成"主楼 + 跟帖"的树
+function buildThread(records) {
+    const roots = [];
+    const flat = [];
+    const byNum = new Map();
+    let lastRoot = null;
+    for (const rec of records) {
+        const item = {
+            kind: rec.replyTo != null ? 'reply' : 'floor',
+            num: rec.num,
+            replyTo: rec.replyTo,
+            name: rec.name,
+            likes: rec.likes,
+            content: rec.content,
+            children: [],
+            target: null,
+            replyToName: '',
+        };
+        if (item.kind === 'reply') {
+            const target = byNum.get(item.replyTo);
+            const root = target ? target.root : lastRoot;
+            if (root) {
+                item.root = root;
+                item.target = target || root;
+                item.replyToName = target && target !== root ? target.name : '';
+                root.children.push(item);
+            } else {
+                item.kind = 'floor'; // 找不到可以挂的主楼，就当主楼显示
+            }
+        }
+        if (item.kind === 'floor') {
+            item.root = item;
+            roots.push(item);
+            lastRoot = item;
+        }
+        if (Number.isFinite(item.num) && !byNum.has(item.num)) byNum.set(item.num, item);
+        flat.push(item);
+    }
+    return { roots, flat, count: flat.length };
+}
+
+function commentRecord(attrs, content, seq) {
+    const nRaw = attrs.n ?? attrs.floor ?? attrs.id;
+    const toRaw = attrs.to ?? attrs.reply ?? attrs.re;
+    const likeRaw = attrs.like ?? attrs.likes;
+    return {
+        num: nRaw !== undefined && /^\d+$/.test(String(nRaw).trim()) ? Number(nRaw) : seq,
+        replyTo: toRaw !== undefined && /^\d+$/.test(String(toRaw).trim()) ? Number(toRaw) : null,
+        name: attrs.by || attrs.name || attrs.author || attrs.user || '匿名',
+        likes: likeRaw !== undefined ? parseLikes(likeRaw) : null,
+        content,
+    };
+}
+
+// 扫描全文里的标签，逐个取出内容。final=false（流式输出中）时，没写完的最后一个元素会被丢掉。
+function parseTagged(text, final) {
+    const tokens = [];
+    const re = new RegExp(TAG_TOKEN_RE.source, 'gi');
+    let m;
+    while ((m = re.exec(text))) {
+        tokens.push({ close: m[1] === '/', tag: m[2].toLowerCase(), attrs: m[3], start: m.index, end: m.index + m[0].length });
+    }
+
+    const out = { main: null, posts: [], loose: [], looseSeq: 0 };
+    let curPost = null;
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t.close) continue;
+        const next = tokens[i + 1];
+        const complete = !!next; // 后面还有标签，说明这一段已经写完
+        const content = cleanTagContent(text.slice(t.end, next ? next.start : text.length));
+        const attrs = parseTagAttrs(t.attrs);
+        const usable = complete || final;
+
+        if (t.tag === 'post') {
+            curPost = {
+                board: attrs.board || attrs.section || attrs.tag || '',
+                name: attrs.by || attrs.name || attrs.author || attrs.user || '匿名',
+                likes: (attrs.like ?? attrs.likes) !== undefined ? parseLikes(attrs.like ?? attrs.likes) : null,
+                title: '', body: '', comments: [], seq: 0,
+            };
+            out.posts.push(curPost);
+        } else if (t.tag === 'title') {
+            if (curPost && usable && content) curPost.title = content.replace(/\s*\n\s*/g, ' ');
+        } else if (t.tag === 'body') {
+            if (curPost && usable && content) curPost.body = content;
+        } else if (t.tag === 'main') {
+            if (!out.main && usable && content) out.main = { name: attrs.by || attrs.name || attrs.author || '', content };
+        } else if (t.tag === 'c') {
+            if (!usable || !content) continue;
+            if (curPost) curPost.comments.push(commentRecord(attrs, content, ++curPost.seq));
+            else out.loose.push(commentRecord(attrs, content, ++out.looseSeq));
+        }
+    }
+    return out;
+}
+
+function parseTaggedResult(text, final) {
+    const t = parseTagged(text, final);
+    if (t.posts.length) {
+        const posts = t.posts
+            .map(p => ({ board: p.board, name: p.name, likes: p.likes, title: p.title, body: p.body, ...buildThread(p.comments) }))
+            .filter(p => p.title || p.body || p.count);
+        if (posts.length) {
+            return {
+                mode: 'forum', posts, mainPost: null, roots: [], flat: [],
+                count: posts.reduce((a, p) => a + p.count + 1, 0), mergedLines: 0,
+            };
+        }
+    }
+    if (t.loose.length || t.main) {
+        const th = buildThread(t.loose);
+        return { mode: 'thread', mainPost: t.main, ...th, mergedLines: 0 };
+    }
+    return null;
+}
+
+// 统一入口：有标签就按标签格式解析；没有就退回旧的竖线/旧格式解析（兼容历史记录和不听话的模型）
+function parseForumAny(text, final = true) {
+    const src = String(text ?? '');
+    if (/<(?:post|c|main)\b/i.test(src)) {
+        const tagged = parseTaggedResult(src, final);
+        if (tagged) return tagged;
+    }
+    const legacy = parseForumSmart(src);
+    return { mode: 'thread', ...legacy };
+}
+
 // 网名是否就是主角（网名后面如果带括号标注，括号前面的部分才算）
 function isProtagonistName(name, protagonist) {
     if (!protagonist) return false;
@@ -1140,27 +1479,51 @@ function isProtagonistName(name, protagonist) {
     return base === protagonist;
 }
 
-// 没开"主角参与"时的保险：就算AI不听话把主角写进来了，也在显示时直接去掉
-function dropProtagonist(parsed, protagonist) {
-    if (!protagonist) return parsed;
+function filterThreadProtagonist(thread, protagonist) {
     const keptRoots = [];
-    const flat = [];
-    for (const root of parsed.roots) {
+    const keep = new Set();
+    for (const root of thread.roots) {
         if (isProtagonistName(root.name, protagonist)) continue;
         root.children = root.children.filter(c => !isProtagonistName(c.name, protagonist));
         keptRoots.push(root);
-        flat.push(root, ...root.children);
+        keep.add(root);
+        root.children.forEach(c => keep.add(c));
     }
-    // 保持原来的出现顺序
-    const keptSet = new Set(flat);
-    const orderedFlat = parsed.flat.filter(x => keptSet.has(x));
-    const mainPost = parsed.mainPost && isProtagonistName(parsed.mainPost.name, protagonist) ? null : parsed.mainPost;
-    return { mainPost, roots: keptRoots, flat: orderedFlat, count: orderedFlat.length };
+    const flat = thread.flat.filter(x => keep.has(x)); // 保持原来的出现顺序
+    return { roots: keptRoots, flat, count: flat.length };
 }
 
-// 把解析结果还原成朴素文字，存进"记忆"给AI下一轮看；不带那套竖线格式，避免AI下一轮被带偏
+// 没开"主角参与"时的保险：就算AI不听话把主角写进来了，也在显示时直接去掉
+function dropProtagonist(parsed, protagonist) {
+    if (!protagonist) return parsed;
+    if (parsed.mode === 'forum') {
+        const posts = parsed.posts
+            .filter(p => !isProtagonistName(p.name, protagonist))
+            .map(p => ({ ...p, ...filterThreadProtagonist(p, protagonist) }));
+        return { ...parsed, posts, count: posts.reduce((a, p) => a + p.count + 1, 0) };
+    }
+    const th = filterThreadProtagonist(parsed, protagonist);
+    const mainPost = parsed.mainPost && isProtagonistName(parsed.mainPost.name, protagonist) ? null : parsed.mainPost;
+    return { ...parsed, mainPost, ...th };
+}
+
+function snippet(text, max) {
+    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+    return t.length > max ? t.slice(0, max) + '…' : t;
+}
+
+// 把解析结果还原成朴素文字，存进"记忆"给AI下一轮看；不带标签格式，避免AI下一轮被带偏
 function forumToPlainText(parsed) {
     const lines = [];
+    if (parsed.mode === 'forum') {
+        for (const p of parsed.posts) {
+            lines.push(`【帖子】${p.board ? '[' + p.board + '] ' : ''}${p.title || snippet(p.body, 20)}（楼主${p.name}）：${snippet(p.body, 80)}`);
+            for (const c of p.flat.slice(0, 6)) {
+                lines.push(`    ${c.name}：${snippet(c.content, 50)}`);
+            }
+        }
+        return lines.join('\n').slice(0, 2500);
+    }
     if (parsed.mainPost) {
         lines.push(`【主贴】${parsed.mainPost.name ? parsed.mainPost.name + '：' : ''}${parsed.mainPost.content}`);
     }
@@ -1196,28 +1559,172 @@ function pickHotRoots(roots) {
     return roots.slice().sort((a, b) => hotScore(b) - hotScore(a)).slice(0, n);
 }
 
-function snippet(text, max) {
-    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
-    return t.length > max ? t.slice(0, max) + '…' : t;
+// 热帖：赞数 + 回复数×8
+function postHotScore(p) {
+    return (Number.isFinite(p.likes) ? p.likes : 0) + p.count * 8;
 }
 
-// 把生成结果渲染成"楼层卡片"。showAdopt: 是否在每条后面加"采纳"按钮（只在同人模式下有意义）
+// 渲染用的一组小工具：它们共用同一份"采纳按钮"登记表
+function makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn) {
+    let idx = 0;
+    const H = {};
+    H.pushAdopt = (item) => {
+        const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
+        adoptSource[idx] = m && item.content ? { realName: m[1].trim(), content: item.content } : null;
+        return idx++;
+    };
+    H.likesHtml = (item) => (Number.isFinite(item.likes)
+        ? `<span class="future-observer-likes">👍 ${escapeHtml(formatLikes(item.likes))}</span>` : '');
+    H.isMe = (item) => protagonistOn && isProtagonistName(item.name, protagonist);
+    H.meBadge = (item) => (H.isMe(item) ? '<span class="future-observer-chip future-observer-chip-small">主角</span>' : '');
+    H.meClass = (item) => (H.isMe(item) ? ' is-protagonist' : '');
+
+    // 树形：主楼 + 挂在下面的跟帖（论坛楼层 / 新闻评论区 / 帖子详情页共用）
+    H.treeHtml = (thread, hotEnabled) => {
+        const renderRoot = (root, hot) => {
+            const i = H.pushAdopt(root);
+            let h = `<div class="future-observer-floor${hot ? ' is-hot' : ''}${H.meClass(root)}">`
+                + '<div class="future-observer-floor-head">'
+                + (hot ? '<span class="future-observer-hot-badge">🔥</span>' : '')
+                + `<span class="future-observer-name">${escapeHtml(root.name)}</span>${H.meBadge(root)}`
+                + `${H.likesHtml(root)}<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
+                + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
+                + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
+            if (root.children.length) {
+                h += '<div class="future-observer-replies">';
+                for (const child of root.children) {
+                    const j = H.pushAdopt(child);
+                    h += `<div class="future-observer-reply${H.meClass(child)}">`
+                        + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>${H.meBadge(child)}`
+                        + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
+                        + `${H.likesHtml(child)}<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
+                        + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
+                        + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
+                }
+                h += '</div>';
+            }
+            return h + '</div>';
+        };
+
+        const hotRoots = hotEnabled ? pickHotRoots(thread.roots) : [];
+        let html = '';
+        if (hotRoots.length) {
+            const hotSet = new Set(hotRoots);
+            html += '<div class="future-observer-group-title">🔥 热评</div>';
+            for (const root of hotRoots) html += renderRoot(root, true);
+            html += '<div class="future-observer-group-title">全部评论</div>';
+            for (const root of thread.roots) if (!hotSet.has(root)) html += renderRoot(root, false);
+        } else {
+            for (const root of thread.roots) html += renderRoot(root, false);
+        }
+        return html;
+    };
+
+    H.chatHtml = (thread) => {
+        let html = '';
+        for (const item of thread.flat) {
+            const i = H.pushAdopt(item);
+            html += `<div class="future-observer-msg${H.meClass(item)}">`
+                + `<div class="future-observer-msg-name">${escapeHtml(item.name)}${H.meBadge(item)}</div>`
+                + '<div class="future-observer-bubble">'
+                + (item.kind === 'reply' && item.target
+                    ? `<div class="future-observer-quote">↩ ${escapeHtml(item.target.name)}：${escapeHtml(snippet(item.target.content, 24))}</div>` : '')
+                + `<div class="future-observer-text">${escapeHtml(item.content)}</div></div>`
+                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+        }
+        return html;
+    };
+
+    H.danmakuHtml = (thread) => {
+        let html = '';
+        for (const item of thread.flat) {
+            const i = H.pushAdopt(item);
+            html += `<div class="future-observer-danmaku-item${H.meClass(item)}">`
+                + `<span class="future-observer-danmaku-text">${escapeHtml(item.content)}</span>`
+                + `<span class="future-observer-danmaku-name">${escapeHtml(item.name)}</span>`
+                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+        }
+        return html;
+    };
+    return H;
+}
+
+// 多帖论坛：帖子列表 / 帖子详情
+function renderForumHtml(parsed, H, postIdx, settings, streaming) {
+    const posts = parsed.posts;
+
+    if (Number.isInteger(postIdx) && posts[postIdx]) {
+        const p = posts[postIdx];
+        let h = '<div class="future-observer-feed future-observer-postdetail">'
+            + '<button type="button" class="future-observer-postback">‹ 返回帖子列表</button>'
+            + '<div class="future-observer-posthead">'
+            + '<div class="future-observer-posthead-top">'
+            + (p.board ? `<span class="future-observer-chip future-observer-chip-small">${escapeHtml(p.board)}</span>` : '')
+            + `<span class="future-observer-name">${escapeHtml(p.name)}</span>${H.meBadge(p)}${H.likesHtml(p)}</div>`
+            + `<div class="future-observer-posttitle">${escapeHtml(p.title || snippet(p.body, 24))}</div>`
+            + (p.body ? `<div class="future-observer-text">${escapeHtml(p.body)}</div>` : '')
+            + '</div>';
+        h += p.count
+            ? H.treeHtml(p, !!settings.hotComments && !streaming)
+            : '<div class="future-observer-empty">这个帖子还没有人回复。</div>';
+        if (streaming) h += '<div class="future-observer-streaming">✍️ 正在写……</div>';
+        return h + '</div>';
+    }
+
+    const order = posts.map((_, i) => i);
+    let hotSet = new Set();
+    if (settings.hotComments && !streaming && posts.length >= 3) {
+        const ranked = order.slice().sort((a, b) => postHotScore(posts[b]) - postHotScore(posts[a]));
+        hotSet = new Set(ranked.slice(0, 2));
+    }
+    const card = (i) => {
+        const p = posts[i];
+        const hot = hotSet.has(i);
+        return `<div class="future-observer-postcard${hot ? ' is-hot' : ''}${H.meClass(p)}" data-fo-post="${i}">`
+            + '<div class="future-observer-postcard-top">'
+            + (hot ? '<span class="future-observer-hot-badge">🔥</span>' : '')
+            + (p.board ? `<span class="future-observer-chip future-observer-chip-small">${escapeHtml(p.board)}</span>` : '')
+            + '</div>'
+            + `<div class="future-observer-postcard-title">${escapeHtml(p.title || snippet(p.body, 24) || '（无标题）')}</div>`
+            + (p.body ? `<div class="future-observer-postcard-snippet">${escapeHtml(snippet(p.body, 70))}</div>` : '')
+            + '<div class="future-observer-postcard-meta">'
+            + `<span class="future-observer-name">${escapeHtml(p.name)}</span>${H.meBadge(p)}`
+            + `${H.likesHtml(p)}<span class="future-observer-comments-count">💬 ${p.count}</span></div></div>`;
+    };
+
+    let h = '<div class="future-observer-feed future-observer-postlist">';
+    if (hotSet.size) {
+        h += '<div class="future-observer-group-title">🔥 热帖</div>';
+        for (const i of order.filter(i => hotSet.has(i)).sort((a, b) => postHotScore(posts[b]) - postHotScore(posts[a]))) h += card(i);
+        h += '<div class="future-observer-group-title">全部帖子</div>';
+        for (const i of order.filter(i => !hotSet.has(i))) h += card(i);
+    } else {
+        for (const i of order) h += card(i);
+    }
+    if (streaming) h += '<div class="future-observer-streaming">✍️ 正在写……</div>';
+    return h + '</div>';
+}
+
+// 把生成结果渲染出来。showAdopt: 是否在每条后面加"采纳"按钮（只在同人模式下有意义）
 // opts.streaming: 流式输出中，内容还没写完——不做热评重排，末尾加"正在写"提示
 function renderResultInto($el, rawText, showAdopt, opts = {}) {
     const settings = getSettings();
     const streaming = !!opts.streaming;
     const raw = String(rawText ?? '');
+    // 记下来，点开帖子/返回列表时要用同一份内容重新渲染
+    $el.data('foRaw', raw).data('foShowAdopt', !!showAdopt);
 
-    // 开了"先构思"，且还没看到构思结束标签、也还没开始出现楼层行：说明还在构思阶段
+    // 开了"先构思"，且还没看到构思结束标签、也还没开始出现正文：说明还在构思阶段
     const planMode = settings.planFirst !== false;
-    const hasFloorLine = /^[\s*]*(?:主贴|主?楼层?|回复?)\s*[|｜]/m.test(raw);
-    if (streaming && !/<\/构思>/.test(raw) && ((/<构思>/.test(raw)) || (planMode && !hasFloorLine))) {
+    const hasBodyStart = /<(?:post|c|main)\b/i.test(raw) || /^[\s*]*(?:主贴|主?楼层?|回复?)\s*[|｜]/m.test(raw);
+    if (streaming && !/<\/构思>/.test(raw) && ((/<构思>/.test(raw)) || (planMode && !hasBodyStart))) {
         $el.text(`🧠 正在构思……（已写 ${raw.length} 字）`);
         return;
     }
 
     let text = stripPlanBlock(raw);
-    if (streaming) text = trimIncompleteTail(text);
+    const hasTags = /<(?:post|c|main)\b/i.test(text);
+    if (streaming && !hasTags) text = trimIncompleteTail(text);
     if (!text) {
         if (streaming) {
             $el.text('✍️ 正在写……');
@@ -1232,33 +1739,29 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
     const skin = SKIN_SPECS[settings.skin] ? settings.skin : 'forum';
     const protagonist = getProtagonistName();
     const protagonistOn = !!settings.protagonistMode;
-    let parsed = parseForumSmart(text);
+    let parsed = parseForumAny(text, !streaming);
     if (!protagonistOn) parsed = dropProtagonist(parsed, protagonist);
 
-    const adoptSource = []; // 与 data-fo-i 下标一一对应，用于事后挂"采纳"按钮
-    let idx = 0;
-    const pushAdopt = (item) => {
-        const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
-        adoptSource[idx] = m && item.content ? { realName: m[1].trim(), content: item.content } : null;
-        return idx++;
-    };
-    const likesHtml = (item) => (Number.isFinite(item.likes)
-        ? `<span class="future-observer-likes">👍 ${escapeHtml(formatLikes(item.likes))}</span>` : '');
-    const meBadge = (item) => (protagonistOn && isProtagonistName(item.name, protagonist)
-        ? '<span class="future-observer-chip future-observer-chip-small">主角</span>' : '');
-    const meClass = (item) => (protagonistOn && isProtagonistName(item.name, protagonist)
-        ? ' is-protagonist' : '');
-
-    let html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
-
-    if (parsed.count === 0 && !parsed.mainPost && !streaming && planMode && !/<\/构思>/.test(raw)) {
-        // 开了先构思，却没有任何楼层、也没有构思结束标签：多半是输出在构思阶段被截断了
-        $el.text('没有识别到论坛格式的内容。可能是输出在“构思”阶段就被截断了（请调大“最大输出长度”），也可能是AI没按格式输出（点下方“查看AI原始输出”看看它写了什么）。');
+    // 流式输出中，还没有任何一条写完整：别把半截标签当正文显示
+    if (streaming && parsed.mode === 'thread' && parsed.count === 0 && !parsed.mainPost) {
+        $el.text('✍️ 正在写……');
         return;
     }
 
-    if (parsed.count === 0 && !parsed.mainPost) {
+    const adoptSource = [];
+    const H = makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn);
+    let html;
+
+    if (parsed.mode === 'forum') {
+        const postIdx = $el.data('foPost');
+        html = renderForumHtml(parsed, H, Number.isInteger(postIdx) ? postIdx : null, settings, streaming);
+    } else if (parsed.count === 0 && !parsed.mainPost && !streaming && planMode && !/<\/构思>/.test(raw)) {
+        // 开了先构思，却没有任何楼层、也没有构思结束标签：多半是输出在构思阶段被截断了
+        $el.text('没有识别到论坛格式的内容。可能是输出在“构思”阶段就被截断了（请调大“最大输出长度”），也可能是AI没按格式输出（点下方“查看AI原始输出”看看它写了什么）。');
+        return;
+    } else if (parsed.count === 0 && !parsed.mainPost) {
         // 完全认不出格式：退回逐行显示（过滤掉空行和纯符号行）
+        html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
         const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => /[\p{L}\p{N}]/u.test(l));
         lines.forEach((line, i) => {
             const fan = parseFandomLine(line);
@@ -1266,7 +1769,9 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
             html += `<div class="future-observer-floor"><div class="future-observer-text">${escapeHtml(line)}</div>`
                 + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
         });
+        html += '</div>';
     } else {
+        html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
         if (parsed.mainPost) {
             const mp = parsed.mainPost;
             html += '<div class="future-observer-mainpost"><div class="future-observer-mainpost-head">'
@@ -1274,69 +1779,13 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
                 + (mp.name ? `<span class="future-observer-name">${escapeHtml(mp.name)}</span>` : '')
                 + `</div><div class="future-observer-text">${escapeHtml(mp.content)}</div></div>`;
         }
-
-        if (skin === 'chat') {
-            for (const item of parsed.flat) {
-                const i = pushAdopt(item);
-                html += `<div class="future-observer-msg${meClass(item)}">`
-                    + `<div class="future-observer-msg-name">${escapeHtml(item.name)}${meBadge(item)}</div>`
-                    + '<div class="future-observer-bubble">'
-                    + (item.kind === 'reply' && item.target
-                        ? `<div class="future-observer-quote">↩ ${escapeHtml(item.target.name)}：${escapeHtml(snippet(item.target.content, 24))}</div>` : '')
-                    + `<div class="future-observer-text">${escapeHtml(item.content)}</div></div>`
-                    + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
-            }
-        } else if (skin === 'danmaku') {
-            for (const item of parsed.flat) {
-                const i = pushAdopt(item);
-                html += `<div class="future-observer-danmaku-item${meClass(item)}">`
-                    + `<span class="future-observer-danmaku-text">${escapeHtml(item.content)}</span>`
-                    + `<span class="future-observer-danmaku-name">${escapeHtml(item.name)}</span>`
-                    + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
-            }
-        } else {
-            // 论坛楼层 / 新闻评论区：树形结构，跟帖挂在被回复的楼下面
-            const renderRoot = (root, hot) => {
-                const i = pushAdopt(root);
-                let h = `<div class="future-observer-floor${hot ? ' is-hot' : ''}${meClass(root)}">`
-                    + '<div class="future-observer-floor-head">'
-                    + (hot ? '<span class="future-observer-hot-badge">🔥</span>' : '')
-                    + `<span class="future-observer-name">${escapeHtml(root.name)}</span>${meBadge(root)}`
-                    + `${likesHtml(root)}<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
-                    + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
-                    + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
-                if (root.children.length) {
-                    h += '<div class="future-observer-replies">';
-                    for (const child of root.children) {
-                        const j = pushAdopt(child);
-                        h += `<div class="future-observer-reply${meClass(child)}">`
-                            + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>${meBadge(child)}`
-                            + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
-                            + `${likesHtml(child)}<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
-                            + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
-                            + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
-                    }
-                    h += '</div>';
-                }
-                return h + '</div>';
-            };
-
-            const useHot = !streaming && !!settings.hotComments && SKIN_SPECS[skin].hotAllowed;
-            const hotRoots = useHot ? pickHotRoots(parsed.roots) : [];
-            if (hotRoots.length) {
-                const hotSet = new Set(hotRoots);
-                html += '<div class="future-observer-group-title">🔥 热评</div>';
-                for (const root of hotRoots) html += renderRoot(root, true);
-                html += '<div class="future-observer-group-title">全部评论</div>';
-                for (const root of parsed.roots) if (!hotSet.has(root)) html += renderRoot(root, false);
-            } else {
-                for (const root of parsed.roots) html += renderRoot(root, false);
-            }
-        }
+        if (skin === 'chat') html += H.chatHtml(parsed);
+        else if (skin === 'danmaku') html += H.danmakuHtml(parsed);
+        else html += H.treeHtml(parsed, !streaming && !!settings.hotComments && SKIN_SPECS[skin].hotAllowed);
+        if (streaming) html += '<div class="future-observer-streaming">✍️ 正在写……</div>';
+        html += '</div>';
     }
 
-    if (streaming) html += '<div class="future-observer-streaming">✍️ 正在写……</div>';
-    html += '</div>';
     $el.html(html);
 
     if (showAdopt) {
@@ -1347,6 +1796,17 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
             $el.find(`.future-observer-actions[data-fo-i="${i}"]`).append($btn);
         });
     }
+}
+
+// 点开帖子/返回列表时，用同一份内容重新渲染（多帖论坛模式）
+function rerenderResultBox($box) {
+    const raw = $box.data('foRaw');
+    if (raw === undefined) return;
+    renderResultInto($box, raw, !!$box.data('foShowAdopt'));
+    const full = $box.data('foRawFull');
+    if (full) appendRawViewer($box, full);
+    const el = $box.get(0);
+    if (el && $box.hasClass('future-observer-popup-result')) el.scrollTop = 0;
 }
 
 // 历史浏览游标：纯前端临时状态，不需要持久化，每个"分类"（时间方向+身份+同人作品名）各有自己的游标
@@ -1377,7 +1837,9 @@ function showHistoryAt(scopeKey, idx) {
     const settings = getSettings();
     const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
     $('.future-observer-result').each(function () {
-        renderResultInto($(this), entry.text, showAdopt);
+        const $box = $(this);
+        $box.removeData('foPost').removeData('foRawFull');
+        renderResultInto($box, entry.text, showAdopt);
     });
     refreshHistoryNav();
 }
@@ -1533,8 +1995,10 @@ async function generateObservation() {
 
         if (run.cancelled) {
             // 取消：能保留多少保留多少（最后一行可能只写了一半，丢掉）
-            const partial = cleanForumResult(trimIncompleteTail(result || run.partial));
-            const parsedPartial = parseForumSmart(partial);
+            const partialRaw = result || run.partial || '';
+            // 标签格式下，没写完的元素解析时会自动丢掉，不用再按行截断；旧格式才需要丢掉半截的最后一行
+            const partial = cleanForumResult(/<(?:post|c|main)\b/i.test(partialRaw) ? trimToLastCloseTag(partialRaw) : trimIncompleteTail(partialRaw));
+            const parsedPartial = parseForumAny(partial, false);
             if (!parsedPartial.count && !parsedPartial.mainPost) {
                 resultBoxes.text('已取消。');
                 return;
@@ -1545,8 +2009,10 @@ async function generateObservation() {
 
         const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
-            renderResultInto($(this), result, showAdopt);
-            appendRawViewer($(this), rawOriginal);
+            const $box = $(this);
+            $box.removeData('foPost').data('foRawFull', rawOriginal); // 新一轮结果：回到帖子列表
+            renderResultInto($box, result, showAdopt);
+            appendRawViewer($box, rawOriginal);
         });
         $('.future-observer-popup-result').scrollTop(0);
 
@@ -1561,7 +2027,7 @@ async function generateObservation() {
         refreshHistoryNav();
 
         if (settings.memoryEnabled) {
-            const parsed = parseForumSmart(cleaned);
+            const parsed = parseForumAny(cleaned, true);
             await saveMemoryEntry(scopeKey, parsed.count ? forumToPlainText(parsed) : cleaned);
         }
     } finally {
@@ -1635,8 +2101,12 @@ function syncControlsFromSettings() {
     });
     $('.future-observer-richness-select').val(RICHNESS_SPECS[settings.richness] ? settings.richness : 'rich');
     $('.future-observer-plan-toggle').prop('checked', settings.planFirst !== false);
-    $('.future-observer-skin-select').val(SKIN_SPECS[settings.skin] ? settings.skin : 'forum');
-    $('.future-observer-hot-toggle').prop('checked', !!settings.hotComments).prop('disabled', !getSkinSpec(settings).hotAllowed);
+    const forumModeOn = settings.forumMode === 'forum';
+    $('.future-observer-mode-select').val(forumModeOn ? 'forum' : 'thread');
+    // 多帖论坛模式自带论坛外观：载体和微博体在这个模式下不起作用
+    $('.future-observer-skin-select').val(SKIN_SPECS[settings.skin] ? settings.skin : 'forum').prop('disabled', forumModeOn);
+    $('#future-observer-popup-weibo-toggle').prop('disabled', forumModeOn);
+    $('.future-observer-hot-toggle').prop('checked', !!settings.hotComments).prop('disabled', !forumModeOn && !getSkinSpec(settings).hotAllowed);
     $('.future-observer-protagonist-toggle').prop('checked', !!settings.protagonistMode);
     $('.future-observer-protagonist-name').val(settings.protagonistName || '').toggle(!!settings.protagonistMode);
     $('#future-observer-maxtokens').val(Number(settings.maxOutputTokens) || 0);
@@ -1729,6 +2199,28 @@ function bindSharedControls() {
         settings.richness = String($(this).val());
         saveSettings();
         syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverMode').on('change.futureObserverMode', '.future-observer-mode-select', function () {
+        const settings = getSettings();
+        settings.forumMode = $(this).val() === 'forum' ? 'forum' : 'thread';
+        saveSettings();
+        syncControlsFromSettings();
+        refreshHistoryNav(); // 两种形式的历史记录是分开的
+    });
+
+    $(document).off('click.futureObserverPostCard').on('click.futureObserverPostCard', '.future-observer-postcard', function () {
+        const $box = $(this).closest('.future-observer-result');
+        const idx = Number($(this).attr('data-fo-post'));
+        if (!Number.isInteger(idx)) return;
+        $box.data('foPost', idx);
+        rerenderResultBox($box);
+    });
+
+    $(document).off('click.futureObserverPostBack').on('click.futureObserverPostBack', '.future-observer-postback', function () {
+        const $box = $(this).closest('.future-observer-result');
+        $box.removeData('foPost');
+        rerenderResultBox($box);
     });
 
     $(document).off('change.futureObserverSkin').on('change.futureObserverSkin', '.future-observer-skin-select', function () {
@@ -1984,6 +2476,13 @@ function buildFloatingUI() {
                 <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（更充实，更慢）</label>
                 <div class="future-observer-popup-selectrow">
+                    <span>形式</span>
+                    <select class="future-observer-mode-select">
+                        <option value="thread">评论区（一个帖子）</option>
+                        <option value="forum">多帖论坛（帖子列表）</option>
+                    </select>
+                </div>
+                <div class="future-observer-popup-selectrow">
                     <span>载体</span>
                     <select class="future-observer-skin-select">
                         <option value="forum">论坛楼层</option>
@@ -2112,11 +2611,13 @@ function renderOptionChips() {
         chips.push(work ? `《${work}》` : '作品随机');
         if (settings.fandomSameWorld) chips.push('同一世界');
     }
-    if (settings.skin && settings.skin !== 'forum') {
+    const forumModeChip = settings.forumMode === 'forum';
+    if (forumModeChip) chips.push('多帖论坛');
+    if (!forumModeChip && settings.skin && settings.skin !== 'forum') {
         chips.push((SKIN_OPTIONS.find(o => o.value === settings.skin) || { label: settings.skin }).label);
     }
-    if (settings.weiboMode) chips.push('微博体');
-    if (settings.hotComments && getSkinSpec(settings).hotAllowed) chips.push('热评');
+    if (!forumModeChip && settings.weiboMode) chips.push('微博体');
+    if (settings.hotComments && (forumModeChip || getSkinSpec(settings).hotAllowed)) chips.push('热评');
     if (settings.protagonistMode) chips.push('主角参与');
     if (settings.memoryEnabled) chips.push('记忆');
     const richLabel = (RICHNESS_OPTIONS.find(o => o.value === settings.richness) || RICHNESS_OPTIONS[2]).label;
