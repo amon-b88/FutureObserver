@@ -37,8 +37,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
     fandomWorkHistory: [], // 之前填过的作品名，最新的在最前面，供输入框旁边的历史下拉用
     fandomSameWorld: false, // 剧情本身就发生在这部作品的世界里（穿越/同人卡），而不是外部围观
-    weiboMode: false, // 微博体：先发一条主贴，评论都围绕主贴的具体观点展开
-    memoryEnabled: false, // 记忆开关：这次生成会参考"同一类评论者"上一次讨论的内容
+    theme: 'night', // 主题：'night' 暗夜（随时间方向变色）| 'paper' 纸笺 | 'sakura' 樱花 | 'starry' 星空 | 'neon' 霓虹 | 'ink' 水墨
     fabEnabled: true,
     worldInfoEnabled: true,
     fabX: null,
@@ -166,8 +165,8 @@ function buildFandomIdentityText(work, isSameWorld) {
     return `${base}${maybeBuildWorldBleedRule()}`;
 }
 
-// 记忆的分类粒度：时间方向 + 身份 +（同人模式下）随机/具体作品名。
-// 同人·指定作品 按作品名分别独立记忆；同人·随机 不按作品细分，统一记一条。
+// 历史记录的分类粒度：时间方向 + 身份 +（同人模式下）随机/具体作品名 +（多帖论坛模式下）形式。
+// 同人·指定作品 按作品名分别独立保存；同人·随机 不按作品细分，统一保存。
 function getMemoryScopeKey(settings) {
     const direction = settings.timeDirection;
     const identity = settings.identity;
@@ -179,41 +178,7 @@ function getMemoryScopeKey(settings) {
     return `${direction}:${identity}${suffix}`;
 }
 
-// 记忆存取：绑定在"当前聊天"本身（chatMetadata），不是全局设置，切换聊天/角色会自动换成对应那条。
-function getMemoryStore() {
-    const ctx = getContext();
-    ctx.chatMetadata ??= {};
-    if (!ctx.chatMetadata.future_observer_memory) {
-        ctx.chatMetadata.future_observer_memory = {};
-    }
-    return ctx.chatMetadata.future_observer_memory;
-}
-
-function getMemoryEntry(scopeKey) {
-    try {
-        const store = getMemoryStore();
-        return store[scopeKey]?.text || '';
-    } catch (error) {
-        console.warn('[观察者论坛] 读取记忆失败：', error);
-        return '';
-    }
-}
-
-async function saveMemoryEntry(scopeKey, text) {
-    try {
-        const ctx = getContext();
-        const store = getMemoryStore();
-        store[scopeKey] = { text: String(text || '').slice(0, 1500), savedAt: Date.now() };
-        if (typeof ctx.saveMetadata === 'function') {
-            await ctx.saveMetadata();
-        }
-    } catch (error) {
-        console.warn('[观察者论坛] 保存记忆失败：', error);
-    }
-}
-
-// 历史记录浏览：跟"记忆"是两回事——记忆是喂给AI看的、只留一条精简版；
-// 这个是给你自己翻看的、保留最近几条完整原文，跟"记忆开关"是否打开无关，一直都会记录。
+// 历史记录浏览：给你自己翻看的，保留最近几条完整原文，每次生成都会记录。
 const HISTORY_MAX_ENTRIES = 5;
 
 function getHistoryStore() {
@@ -600,9 +565,9 @@ function buildPostTable(count, richness) {
     }).join('\n');
 }
 
-// 多帖论坛模式的完整提示词。公共部分（身份、世界书、记忆、讨论焦点等）由 buildPrompt 算好传进来。
+// 多帖论坛模式的完整提示词。公共部分（身份、世界书、讨论焦点等）由 buildPrompt 算好传进来。
 function buildForumPromptText(e) {
-    const { settings, direction, identityText, protagonist, memoryBlock, worldInfoBlock, angleText, voiceText, planMin, personaMin, personaMax, story } = e;
+    const { settings, direction, identityText, protagonist, worldInfoBlock, angleText, voiceText, planMin, personaMin, personaMax, story } = e;
     const f = FORUM_SPECS[settings.richness] || FORUM_SPECS.rich;
     const hotOn = !!settings.hotComments;
     const postCount = randInt(f.posts[0], f.posts[1]);
@@ -690,7 +655,7 @@ ${angleText}
 ${voiceText}
 
 ${formatBlock}
-${worldInfoBlock}${memoryBlock}
+${worldInfoBlock}
 【剧情片段】
 ${story}
 
@@ -728,32 +693,6 @@ async function buildPrompt(story) {
     const worldInfoBlock = worldInfoText
         ? `\n【世界设定参考】（背景知识，不是新发生的剧情，仅用于帮助理解剧情里的名词和背景）\n${worldInfoText}\n`
         : '';
-
-    const weiboBlock = settings.weiboMode ? `
-
-【微博体规则】
-- 先由评论者里的某一位发一条抓眼球的"主贴"，标题党风格（比如"讨论……""震惊……""只有我觉得……"这种开头），用一两句话说出一个具体、有态度的观点或角度，而不是泛泛复述剧情。
-- 主贴放在所有评论之前，用下面这个固定格式（方便程序识别，务必照抄，不要变化）：
-<main by="某某">只有我觉得他这波操作离谱吗？</main>
-- 之后所有的主楼评论和跟帖，都必须针对这条主贴提出的具体观点来回应（赞同、反驳、追问、玩梗），不要各自评论剧情里不相关的别的地方。
-- 楼层编号从主贴之后的第一条评论开始算1楼，主贴本身不算入楼层编号。` : '';
-
-    let memoryBlock = '';
-    if (settings.memoryEnabled) {
-        const scopeKey = getMemoryScopeKey(settings);
-        const lastMemory = getMemoryEntry(scopeKey);
-        if (lastMemory) {
-            memoryBlock = `\n【上一轮讨论回顾——这是已经过去的旧内容，不是这次要写的东西】
-${lastMemory}
-
-【关于这次要怎么处理上面这段回顾，硬性要求】
-- 这次是全新的一轮，时间点在上面那轮"之后"，不是同一轮的另一个版本。
-- 严禁把上面这段内容换几个词、调整下语序后再发一遍；严禁让新一轮的整体论点、结构跟上面高度重合。
-- 必须让人看出"事情往后推进了"：可以是分歧被吵得更激烈、可以是有人退让促成和解、可以是出现了新的具体角度把话题带偏、也可以是干脆没人再提这茬、聊起了全新的话题——具体选哪种你自己判断，但必须明确体现出"这是下一轮"，而不是原地踏步。
-- 上面这段回顾只是给你了解"之前发生过什么"，这次要生成的评论内容本身，不需要再重复复述这些旧观点。
-`;
-        }
-    }
 
     let protagonistBlock = '';
     if (protagonist) {
@@ -795,13 +734,13 @@ ${useLengthTable ? '【逐楼提纲】按上面的字数分配表，为每一条
     if (settings.forumMode === 'forum') {
         // 多帖论坛模式：用另一套提示词（公共的素材在上面已经算好）
         return buildForumPromptText({
-            settings, direction, identityText, protagonist, memoryBlock, worldInfoBlock,
+            settings, direction, identityText, protagonist, worldInfoBlock,
             angleText, voiceText, planMin, personaMin, personaMax, story,
         });
     }
 
     // 格式提醒和"开始写"的提示放在整段提示词的最末尾（模型最容易照做的位置）
-    const formatReminder = `（格式提醒：论坛正文必须全部用 <c n=… by=…>…</c> 标签写${settings.weiboMode ? '，主贴用 <main by=…>…</main>' : ''}，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
+    const formatReminder = `（格式提醒：论坛正文必须全部用 <c n=… by=…>…</c> 标签写，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
     const tail = settings.planFirst !== false
         ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写论坛正文：\n<构思>`
         : `${formatReminder}\n\n【观察者评论】`;
@@ -848,8 +787,8 @@ ${angleText}
 【本次语言风格参考——挑几种分配给不同评论者，按身份适配，不必全用】
 ${voiceText}
 
-${formatBlock}${weiboBlock}
-${worldInfoBlock}${memoryBlock}
+${formatBlock}
+${worldInfoBlock}
 【剧情片段】
 ${story}
 
@@ -1107,7 +1046,7 @@ function adoptToInput(realName, content) {
 
 // ==================== 解析与渲染 ====================
 // 提示词要求AI按固定格式输出：
-//   主贴|网名|内容                          （仅微博体）
+//   主贴|网名|内容                          （旧版微博体留下的历史记录里可能有）
 //   楼|编号|网名|[赞数|]内容
 //   回|编号|被回复的编号|网名|[赞数|]内容     （赞数只在开启"热评"时才有）
 // 程序只认这几种行，其余的行（开场白、分隔线、乱入的标签）一律丢掉，所以不会再出现无意义的空格子；
@@ -1306,6 +1245,9 @@ function parseForumSmart(text) {
     return strict;
 }
 
+// 可选主题（名字对应样式表里的 .future-observer-th-名字）
+const THEME_NAMES = ['night', 'paper', 'sakura', 'starry', 'neon', 'ink'];
+
 // 取消生成时，把最后一个没写完的标签（以及它后面的内容）整段丢掉，只保留到最后一个结束标签为止
 function trimToLastCloseTag(text) {
     const src = String(text ?? '');
@@ -1319,7 +1261,7 @@ function trimToLastCloseTag(text) {
 // ==================== 标签格式解析（新） ====================
 // 提示词现在要求AI用成对的标签输出：
 //   评论区模式：  <c n="1" by="网名" like="128">内容</c>        跟帖多一个 to="被回复的编号"
-//   微博体主贴：  <main by="网名">内容</main>
+//   主贴：        <main by="网名">内容</main>（旧版微博体留下的历史记录里可能有，新版不再生成）
 //   多帖论坛模式：<post id="1" board="版块" by="楼主" like="256"><title>…</title><body>…</body><c …>…</c></post>
 // 比用竖线分隔的行更结实：内容里可以有竖线和换行；没写完的标签一眼就能识别并丢掉；跟帖明确知道回复的是哪一条。
 
@@ -1512,32 +1454,7 @@ function snippet(text, max) {
     return t.length > max ? t.slice(0, max) + '…' : t;
 }
 
-// 把解析结果还原成朴素文字，存进"记忆"给AI下一轮看；不带标签格式，避免AI下一轮被带偏
-function forumToPlainText(parsed) {
-    const lines = [];
-    if (parsed.mode === 'forum') {
-        for (const p of parsed.posts) {
-            lines.push(`【帖子】${p.board ? '[' + p.board + '] ' : ''}${p.title || snippet(p.body, 20)}（楼主${p.name}）：${snippet(p.body, 80)}`);
-            for (const c of p.flat.slice(0, 6)) {
-                lines.push(`    ${c.name}：${snippet(c.content, 50)}`);
-            }
-        }
-        return lines.join('\n').slice(0, 2500);
-    }
-    if (parsed.mainPost) {
-        lines.push(`【主贴】${parsed.mainPost.name ? parsed.mainPost.name + '：' : ''}${parsed.mainPost.content}`);
-    }
-    for (const root of parsed.roots) {
-        lines.push(`${root.num}楼 ${root.name}：${root.content}`);
-        for (const child of root.children) {
-            const to = child.replyToName ? `回复${child.replyToName}` : `回复${root.num}楼`;
-            lines.push(`    ↳ ${child.num}楼 ${child.name} ${to}：${child.content}`);
-        }
-    }
-    return lines.join('\n');
-}
-
-// 生成结果的统一清洗入口：去掉"构思"草稿，只留正文（存历史/记忆用）
+// 生成结果的统一清洗入口：去掉"构思"草稿，只留正文（存历史记录用）
 function cleanForumResult(rawText) {
     return stripPlanBlock(rawText);
 }
@@ -1656,7 +1573,8 @@ function renderForumHtml(parsed, H, postIdx, settings, streaming) {
     if (Number.isInteger(postIdx) && posts[postIdx]) {
         const p = posts[postIdx];
         let h = '<div class="future-observer-feed future-observer-postdetail">'
-            + '<button type="button" class="future-observer-postback">‹ 返回帖子列表</button>'
+            + '<div class="future-observer-postbar"><button type="button" class="future-observer-postback">‹ 返回列表</button>'
+            + `<span class="future-observer-postbar-title">${escapeHtml(snippet(p.title || p.body, 30))}</span></div>`
             + '<div class="future-observer-posthead">'
             + '<div class="future-observer-posthead-top">'
             + (p.board ? `<span class="future-observer-chip future-observer-chip-small">${escapeHtml(p.board)}</span>` : '')
@@ -1667,6 +1585,7 @@ function renderForumHtml(parsed, H, postIdx, settings, streaming) {
         h += p.count
             ? H.treeHtml(p, !!settings.hotComments && !streaming)
             : '<div class="future-observer-empty">这个帖子还没有人回复。</div>';
+        h += '<button type="button" class="future-observer-postback future-observer-postback-bottom">‹ 返回帖子列表</button>';
         if (streaming) h += '<div class="future-observer-streaming">✍️ 正在写……</div>';
         return h + '</div>';
     }
@@ -2017,19 +1936,14 @@ async function generateObservation() {
         $('.future-observer-popup-result').scrollTop(0);
 
         if (!cleaned) {
-            // 只有构思、没有正文（多半是输出长度不够被截断了），不存历史也不存记忆，免得污染
+            // 只有构思、没有正文（多半是输出长度不够被截断了），不存进历史记录，免得污染
             return;
         }
 
         const scopeKey = getMemoryScopeKey(settings);
-        await pushHistoryEntry(scopeKey, cleaned); // 历史记录不受"记忆开关"影响，一直都会存
+        await pushHistoryEntry(scopeKey, cleaned); // 每次生成都会存进历史记录
         historyCursor[scopeKey] = getHistoryList(scopeKey).length - 1; // 新生成的这条，游标指向最新
         refreshHistoryNav();
-
-        if (settings.memoryEnabled) {
-            const parsed = parseForumAny(cleaned, true);
-            await saveMemoryEntry(scopeKey, parsed.count ? forumToPlainText(parsed) : cleaned);
-        }
     } finally {
         if (run.renderTimer) clearTimeout(run.renderTimer);
         currentRun = null;
@@ -2092,8 +2006,7 @@ function syncControlsFromSettings() {
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
-    $('#future-observer-popup-weibo-toggle').prop('checked', !!settings.weiboMode);
-    $('#future-observer-popup-memory-toggle').prop('checked', !!settings.memoryEnabled);
+    $('.future-observer-theme-select').val(THEME_NAMES.includes(settings.theme) ? settings.theme : 'night');
 
     $('.future-observer-direction-select').val(settings.timeDirection);
     $('.future-observer-identity-select').each(function () {
@@ -2103,9 +2016,8 @@ function syncControlsFromSettings() {
     $('.future-observer-plan-toggle').prop('checked', settings.planFirst !== false);
     const forumModeOn = settings.forumMode === 'forum';
     $('.future-observer-mode-select').val(forumModeOn ? 'forum' : 'thread');
-    // 多帖论坛模式自带论坛外观：载体和微博体在这个模式下不起作用
+    // 多帖论坛模式自带论坛外观：载体在这个模式下不起作用
     $('.future-observer-skin-select').val(SKIN_SPECS[settings.skin] ? settings.skin : 'forum').prop('disabled', forumModeOn);
-    $('#future-observer-popup-weibo-toggle').prop('disabled', forumModeOn);
     $('.future-observer-hot-toggle').prop('checked', !!settings.hotComments).prop('disabled', !forumModeOn && !getSkinSpec(settings).hotAllowed);
     $('.future-observer-protagonist-toggle').prop('checked', !!settings.protagonistMode);
     $('.future-observer-protagonist-name').val(settings.protagonistName || '').toggle(!!settings.protagonistMode);
@@ -2183,11 +2095,9 @@ function bindSharedControls() {
         const settings = getSettings();
         settings.fandomWork = '';
         settings.fandomSameWorld = false;
-        settings.weiboMode = false;
-        settings.memoryEnabled = false;
         saveSettings();
         syncControlsFromSettings();
-        toastr.info('作品名 / 穿越世界 / 微博体 / 记忆已重置。', '观察者论坛');
+        toastr.info('作品名 / 穿越世界已重置。', '观察者论坛');
     });
 
     $(document).off('click.futureObserverOptionsToggle').on('click.futureObserverOptionsToggle', '#future-observer-options-toggle, #future-observer-chips', function () {
@@ -2197,6 +2107,14 @@ function bindSharedControls() {
     $(document).off('change.futureObserverRichness').on('change.futureObserverRichness', '.future-observer-richness-select', function () {
         const settings = getSettings();
         settings.richness = String($(this).val());
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverTheme').on('change.futureObserverTheme', '.future-observer-theme-select', function () {
+        const settings = getSettings();
+        const v = String($(this).val());
+        settings.theme = THEME_NAMES.includes(v) ? v : 'night';
         saveSettings();
         syncControlsFromSettings();
     });
@@ -2358,20 +2276,6 @@ function bindSharedControls() {
     // 这两个控件是在悬浮球弹窗里，弹窗创建的时机比这里晚，
     // 所以必须用事件委托（绑定在document上，实际点击时才去找目标元素），
     // 不能像上面那样直接对着当前还不存在的元素 $('#id').on(...)，否则绑定会静默失效。
-    $(document).off('change.futureObserverWeiboToggle').on('change.futureObserverWeiboToggle', '#future-observer-popup-weibo-toggle', function () {
-        const settings = getSettings();
-        settings.weiboMode = $(this).is(':checked');
-        saveSettings();
-        renderOptionChips();
-    });
-
-    $(document).off('change.futureObserverMemoryToggle').on('change.futureObserverMemoryToggle', '#future-observer-popup-memory-toggle', function () {
-        const settings = getSettings();
-        settings.memoryEnabled = $(this).is(':checked');
-        saveSettings();
-        renderOptionChips();
-    });
-
     $('#future-observer-customapi-toggle').off('change').on('change', function () {
         const settings = getSettings();
         settings.customApi.enabled = $(this).is(':checked');
@@ -2472,9 +2376,18 @@ function buildFloatingUI() {
                     <div id="future-observer-fandom-history-list" class="future-observer-fandom-history-list" style="display:none;"></div>
                 </div>
                 <label class="future-observer-popup-checkbox" style="display:none;"><input type="checkbox" id="future-observer-fandom-sameworld"> 剧情本身就发生在这部作品的世界里（穿越/同人卡）</label>
-                <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-weibo-toggle"> 微博体（先发主贴，评论围绕主贴讨论）</label>
-                <label class="future-observer-popup-checkbox"><input type="checkbox" id="future-observer-popup-memory-toggle"> 记住上一次（参考上次同类型的讨论）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（更充实，更慢）</label>
+                <div class="future-observer-popup-selectrow">
+                    <span>主题</span>
+                    <select class="future-observer-theme-select">
+                        <option value="night">暗夜（随时间方向变色）</option>
+                        <option value="paper">纸笺</option>
+                        <option value="sakura">樱花</option>
+                        <option value="starry">星空</option>
+                        <option value="neon">霓虹</option>
+                        <option value="ink">水墨</option>
+                    </select>
+                </div>
                 <div class="future-observer-popup-selectrow">
                     <span>形式</span>
                     <select class="future-observer-mode-select">
@@ -2502,7 +2415,7 @@ function buildFloatingUI() {
                         <option value="rich">丰富</option>
                         <option value="epic">长篇</option>
                     </select>
-                    <button type="button" id="future-observer-reset-options" class="future-observer-reset-btn" title="把作品名/穿越世界/微博体/记忆这几个选项清空复位">↺ 重置</button>
+                    <button type="button" id="future-observer-reset-options" class="future-observer-reset-btn" title="把作品名/穿越世界清空复位">↺ 重置</button>
                 </div>
             </div>
             <div class="future-observer-history-nav">
@@ -2585,13 +2498,15 @@ function applyPopupExpandState() {
 // 悬浮弹窗和设置抽屉共用同一套主题色。
 function applyPopupTheme() {
     const settings = getSettings();
-    const targets = $('#future-observer-popup, #future-observer-settings');
+    const targets = $('#future-observer-popup, #future-observer-settings, .future-observer-fab');
     if (!targets.length) return;
     targets.removeClass(
         'future-observer-theme-past future-observer-theme-present '
         + 'future-observer-theme-future future-observer-theme-otherworld',
     );
+    targets.removeClass(THEME_NAMES.map(n => `future-observer-th-${n}`).join(' '));
     targets.addClass(`future-observer-theme-${settings.timeDirection || 'future'}`);
+    targets.addClass(`future-observer-th-${THEME_NAMES.includes(settings.theme) ? settings.theme : 'night'}`);
 }
 
 // 展开/折叠"更多选项"面板（只影响界面，不存进设置，每次打开弹窗默认折叠）
@@ -2616,10 +2531,8 @@ function renderOptionChips() {
     if (!forumModeChip && settings.skin && settings.skin !== 'forum') {
         chips.push((SKIN_OPTIONS.find(o => o.value === settings.skin) || { label: settings.skin }).label);
     }
-    if (!forumModeChip && settings.weiboMode) chips.push('微博体');
     if (settings.hotComments && (forumModeChip || getSkinSpec(settings).hotAllowed)) chips.push('热评');
     if (settings.protagonistMode) chips.push('主角参与');
-    if (settings.memoryEnabled) chips.push('记忆');
     const richLabel = (RICHNESS_OPTIONS.find(o => o.value === settings.richness) || RICHNESS_OPTIONS[2]).label;
     chips.push(`内容·${richLabel}`);
     if (settings.planFirst !== false) chips.push('先构思');

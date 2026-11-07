@@ -13,10 +13,18 @@
 .future-observer-result-details summary{cursor:pointer;user-select:none}
 
 /* 按时间方向切换主题色：过去=复古黄褐，现在=中性绿灰，未来=科幻蓝，异世界=紫 */
-.future-observer-theme-past{--fo-accent:204,150,84}
-.future-observer-theme-present{--fo-accent:122,190,152}
-.future-observer-theme-future{--fo-accent:100,172,255}
-.future-observer-theme-otherworld{--fo-accent:182,124,255}
+.future-observer-popup.future-observer-theme-past,
+.future-observer-settings.future-observer-theme-past,
+.future-observer-fab.future-observer-theme-past{--fo-dir:204,150,84}
+.future-observer-popup.future-observer-theme-present,
+.future-observer-settings.future-observer-theme-present,
+.future-observer-fab.future-observer-theme-present{--fo-dir:122,190,152}
+.future-observer-popup.future-observer-theme-future,
+.future-observer-settings.future-observer-theme-future,
+.future-observer-fab.future-observer-theme-future{--fo-dir:100,172,255}
+.future-observer-popup.future-observer-theme-otherworld,
+.future-observer-settings.future-observer-theme-otherworld,
+.future-observer-fab.future-observer-theme-otherworld{--fo-dir:182,124,255}
 
 /* 历史记录导航条：上一条/第几条/下一条 */
 .future-observer-history-nav{
@@ -120,7 +128,7 @@
     padding:1px 8px;
     border-radius:999px;
     background:rgb(var(--fo-accent));
-    color:#101114;
+    color:var(--fo-on-accent, #101114);
 }
 
 /* "采纳"按钮：只在同人模式下出现 */
@@ -156,6 +164,8 @@
 
 /* ==================== 悬浮球 ==================== */
 .future-observer-fab{
+    --fo-dir:122,190,152;
+    --fo-accent:var(--fo-dir);
     position:fixed;
     right:20px;
     bottom:120px;
@@ -163,7 +173,7 @@
     height:50px;
     border-radius:50%;
     background:linear-gradient(145deg, rgba(48,50,58,.94), rgba(20,21,26,.94));
-    border:1px solid rgba(255,255,255,.2);
+    border:1px solid rgba(var(--fo-accent),.55);
     color:#fff;
     font-size:23px;
     display:flex;
@@ -171,26 +181,139 @@
     justify-content:center;
     cursor:grab;
     z-index:9999;
-    box-shadow:0 4px 14px rgba(0,0,0,.5);
+    box-shadow:0 4px 14px rgba(0,0,0,.5), 0 0 0 3px rgba(var(--fo-accent),.14);
     user-select:none;
     touch-action:none;
     transition:box-shadow .15s ease;
 }
 .future-observer-fab:active{cursor:grabbing;box-shadow:0 1px 4px rgba(0,0,0,.5)}
 
+/* ==================== 主题（暗夜 / 纸笺 / 樱花 / 星空 / 霓虹 / 水墨） ==================== */
+/* 暗夜：配色跟着时间方向变；其余主题有自己固定的配色和花纹 */
+.future-observer-popup.future-observer-th-night{
+    --fo-accent:var(--fo-dir);
+    --fo-bg:#14151a;
+    --fo-fg:#e8e9ee;
+    --fo-surface:rgba(255,255,255,.06);
+    --fo-surface-2:rgba(255,255,255,.12);
+    --fo-line:rgba(255,255,255,.10);
+    --fo-on-accent:#101114;
+    --fo-bar-bg:rgba(20,21,26,.98);
+    --fo-head:linear-gradient(180deg, rgba(var(--fo-accent),.16), rgba(var(--fo-accent),0));
+    --fo-shadow:0 14px 44px rgba(0,0,0,.6);
+    --fo-deco:radial-gradient(circle at 100% 0%, rgba(var(--fo-accent),.10), transparent 46%),radial-gradient(rgba(255,255,255,.04) 1px, transparent 1.3px);
+    --fo-deco-size:auto, 18px 18px;
+}
+.future-observer-settings.future-observer-th-night,
+.future-observer-fab.future-observer-th-night{--fo-accent:var(--fo-dir)}
+.future-observer-popup.future-observer-th-paper{
+    --fo-accent:168,104,44;
+    --fo-bg:#f7f1e3;
+    --fo-fg:#3a3125;
+    --fo-surface:rgba(90,60,20,.06);
+    --fo-surface-2:rgba(90,60,20,.12);
+    --fo-line:rgba(90,60,20,.17);
+    --fo-on-accent:#fffaf0;
+    --fo-bar-bg:rgba(247,241,227,.98);
+    --fo-head:linear-gradient(180deg, rgba(168,104,44,.20), rgba(168,104,44,0));
+    --fo-shadow:0 14px 40px rgba(60,40,10,.35);
+    --fo-deco:radial-gradient(ellipse at 50% 0%, rgba(255,255,255,.55), transparent 60%),repeating-linear-gradient(0deg, transparent 0 27px, rgba(120,90,50,.075) 27px 28px);
+    --fo-deco-size:auto, auto;
+}
+.future-observer-settings.future-observer-th-paper,
+.future-observer-fab.future-observer-th-paper{--fo-accent:168,104,44}
+.future-observer-popup.future-observer-th-sakura{
+    --fo-accent:214,92,132;
+    --fo-bg:#ffeef3;
+    --fo-fg:#4d2c38;
+    --fo-surface:rgba(214,92,132,.07);
+    --fo-surface-2:rgba(214,92,132,.14);
+    --fo-line:rgba(214,92,132,.20);
+    --fo-on-accent:#ffffff;
+    --fo-bar-bg:rgba(255,240,245,.98);
+    --fo-head:linear-gradient(180deg, rgba(214,92,132,.20), rgba(214,92,132,0));
+    --fo-shadow:0 14px 40px rgba(190,70,110,.28);
+    --fo-deco:linear-gradient(165deg, rgba(255,255,255,.7), rgba(255,214,228,.0) 55%),url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140' viewBox='0 0 140 140'%3E%3Cg fill='%23f29bb7' fill-opacity='.30'%3E%3Cg transform='translate(34 36)'%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(72)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(144)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(216)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(288)'/%3E%3C/g%3E%3Cg transform='translate(104 98) scale(.7)'%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(72)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(144)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(216)'/%3E%3Cellipse cx='0' cy='-9' rx='5.5' ry='9' transform='rotate(288)'/%3E%3C/g%3E%3C/g%3E%3Cg fill='%23e8728f' fill-opacity='.35'%3E%3Ccircle cx='34' cy='36' r='2'/%3E%3Ccircle cx='104' cy='98' r='1.4'/%3E%3C/g%3E%3Cg fill='%23f6b3c8' fill-opacity='.35'%3E%3Cellipse cx='96' cy='22' rx='3' ry='5' transform='rotate(35 96 22)'/%3E%3Cellipse cx='20' cy='112' rx='3' ry='5' transform='rotate(-30 20 112)'/%3E%3C/g%3E%3C/svg%3E");
+    --fo-deco-size:auto, 140px 140px;
+}
+.future-observer-settings.future-observer-th-sakura,
+.future-observer-fab.future-observer-th-sakura{--fo-accent:214,92,132}
+.future-observer-popup.future-observer-th-starry{
+    --fo-accent:150,168,255;
+    --fo-bg:#0e1233;
+    --fo-fg:#e8eaff;
+    --fo-surface:rgba(255,255,255,.07);
+    --fo-surface-2:rgba(255,255,255,.14);
+    --fo-line:rgba(160,175,255,.20);
+    --fo-on-accent:#0b1030;
+    --fo-bar-bg:rgba(16,18,60,.98);
+    --fo-head:linear-gradient(180deg, rgba(150,168,255,.20), rgba(150,168,255,0));
+    --fo-shadow:0 14px 44px rgba(5,5,40,.7);
+    --fo-deco:radial-gradient(circle at 88% 8%, rgba(255,236,200,.22), transparent 18%),radial-gradient(1.4px 1.4px at 12% 14%, #fff, transparent),radial-gradient(1px 1px at 28% 32%, rgba(255,255,255,.8), transparent),radial-gradient(1.6px 1.6px at 46% 10%, #fff, transparent),radial-gradient(1px 1px at 63% 26%, rgba(255,255,255,.7), transparent),radial-gradient(1.3px 1.3px at 78% 44%, #fff, transparent),radial-gradient(1px 1px at 9% 58%, rgba(255,255,255,.75), transparent),radial-gradient(1.5px 1.5px at 34% 72%, #fff, transparent),radial-gradient(1px 1px at 55% 63%, rgba(255,255,255,.7), transparent),radial-gradient(1.4px 1.4px at 90% 78%, #fff, transparent),radial-gradient(1px 1px at 70% 92%, rgba(255,255,255,.7), transparent),radial-gradient(1.2px 1.2px at 20% 90%, #fff, transparent),linear-gradient(170deg, #0b1030 0%, #1a1250 58%, #2b1a60 100%);
+    --fo-deco-size:auto;
+}
+.future-observer-settings.future-observer-th-starry,
+.future-observer-fab.future-observer-th-starry{--fo-accent:150,168,255}
+.future-observer-popup.future-observer-th-neon{
+    --fo-accent:0,229,255;
+    --fo-bg:#0a0a14;
+    --fo-fg:#e9f6ff;
+    --fo-surface:rgba(0,229,255,.06);
+    --fo-surface-2:rgba(0,229,255,.13);
+    --fo-line:rgba(0,229,255,.22);
+    --fo-on-accent:#001418;
+    --fo-bar-bg:rgba(10,10,20,.98);
+    --fo-head:linear-gradient(90deg, rgba(0,229,255,.22), rgba(255,64,200,.15));
+    --fo-shadow:0 0 0 1px rgba(0,229,255,.28), 0 0 26px rgba(0,229,255,.2), 0 14px 44px rgba(0,0,0,.65);
+    --fo-deco:radial-gradient(circle at 0% 100%, rgba(255,64,200,.16), transparent 42%),radial-gradient(circle at 100% 0%, rgba(0,229,255,.14), transparent 40%),linear-gradient(rgba(0,229,255,.065) 1px, transparent 1px),linear-gradient(90deg, rgba(0,229,255,.065) 1px, transparent 1px);
+    --fo-deco-size:auto, auto, 26px 26px, 26px 26px;
+}
+.future-observer-settings.future-observer-th-neon,
+.future-observer-fab.future-observer-th-neon{--fo-accent:0,229,255}
+.future-observer-popup.future-observer-th-ink{
+    --fo-accent:170,42,38;
+    --fo-bg:#f1eee4;
+    --fo-fg:#2a2a28;
+    --fo-surface:rgba(0,0,0,.045);
+    --fo-surface-2:rgba(0,0,0,.09);
+    --fo-line:rgba(0,0,0,.14);
+    --fo-on-accent:#fffdf7;
+    --fo-bar-bg:rgba(241,238,228,.98);
+    --fo-head:linear-gradient(180deg, rgba(170,42,38,.14), rgba(170,42,38,0));
+    --fo-shadow:inset 0 0 0 4px #f1eee4, inset 0 0 0 5px rgba(0,0,0,.2), 0 14px 40px rgba(0,0,0,.35);
+    --fo-deco:radial-gradient(ellipse at 0% 0%, rgba(40,40,40,.13), transparent 42%),radial-gradient(ellipse at 100% 100%, rgba(40,40,40,.11), transparent 45%),radial-gradient(circle at 92% 6%, rgba(170,42,38,.10), transparent 22%);
+    --fo-deco-size:auto, auto, auto;
+}
+.future-observer-settings.future-observer-th-ink,
+.future-observer-fab.future-observer-th-ink{--fo-accent:170,42,38}
+
 /* ==================== 悬浮弹窗 ==================== */
 .future-observer-popup{
-    --fo-accent:122,190,152;
+    --fo-dir:122,190,152;
+    --fo-accent:var(--fo-dir);
+    --fo-bg:#14151a;
+    --fo-fg:#e8e9ee;
+    --fo-surface:rgba(255,255,255,.06);
+    --fo-surface-2:rgba(255,255,255,.12);
+    --fo-line:rgba(255,255,255,.10);
+    --fo-on-accent:#101114;
+    --fo-bar-bg:rgba(20,21,26,.98);
+    --fo-head:linear-gradient(180deg, rgba(var(--fo-accent),.16), rgba(var(--fo-accent),0));
+    --fo-shadow:0 14px 44px rgba(0,0,0,.6);
+    --fo-deco:none;
+    --fo-deco-size:auto;
     position:fixed;
     width:380px;
     max-width:calc(100vw - 20px);
     max-height:82vh;
     max-height:min(82dvh, 760px);
-    background:rgba(20,21,26,.98);
-    color:#e8e9ee;
-    border:1px solid rgba(var(--fo-accent),.3);
+    background-color:var(--fo-bg);
+    background-image:var(--fo-deco);
+    background-size:var(--fo-deco-size);
+    color:var(--fo-fg);
+    border:1px solid rgba(var(--fo-accent),.32);
     border-radius:16px;
-    box-shadow:0 14px 44px rgba(0,0,0,.6);
+    box-shadow:var(--fo-shadow);
     z-index:9999;
     display:flex;
     flex-direction:column;
@@ -206,14 +329,14 @@
     padding:11px 14px;
     cursor:move;
     flex-shrink:0;
-    background:linear-gradient(180deg, rgba(var(--fo-accent),.16), rgba(var(--fo-accent),0));
-    border-bottom:1px solid rgba(255,255,255,.06);
+    background:var(--fo-head);
+    border-bottom:1px solid var(--fo-line);
 }
 .future-observer-popup-title{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.03em}
 .future-observer-dot{
     width:8px;height:8px;border-radius:50%;
-    background:rgb(var(--fo-accent));
-    box-shadow:0 0 8px rgba(var(--fo-accent),.8);
+    background:rgb(var(--fo-dir));
+    box-shadow:0 0 8px rgba(var(--fo-dir),.8);
 }
 .future-observer-popup-header-actions{display:flex;gap:2px;align-items:center;cursor:default}
 .future-observer-popup-icon-btn{
@@ -224,7 +347,7 @@
     padding:5px 8px;
     border-radius:8px;
 }
-.future-observer-popup-icon-btn:hover{opacity:1;background:rgba(255,255,255,.08)}
+.future-observer-popup-icon-btn:hover{opacity:1;background:var(--fo-surface-2)}
 
 /* 常驻的一行：时间方向 + 身份 + 更多选项按钮 */
 .future-observer-quickrow{
@@ -235,15 +358,16 @@
 }
 .future-observer-popup select,
 .future-observer-popup input[type="text"]{
-    background:rgba(255,255,255,.06);
-    color:#e8e9ee;
-    border:1px solid rgba(255,255,255,.12);
+    background:var(--fo-surface);
+    color:var(--fo-fg);
+    border:1px solid var(--fo-line);
     border-radius:10px;
     padding:8px 10px;
     font-size:14px;
     min-width:0;
     margin:0;
 }
+.future-observer-popup select option{background:var(--fo-bar-bg);color:var(--fo-fg)}
 .future-observer-popup select:focus,
 .future-observer-popup input[type="text"]:focus{outline:none;border-color:rgba(var(--fo-accent),.6)}
 .future-observer-quickrow select{flex:1 1 0;max-width:none;width:auto}
@@ -251,14 +375,14 @@
     flex-shrink:0;
     width:38px;
     border-radius:10px;
-    border:1px solid rgba(255,255,255,.12);
-    background:rgba(255,255,255,.06);
+    border:1px solid var(--fo-line);
+    background:var(--fo-surface);
     color:inherit;
     font-size:16px;
     cursor:pointer;
     transition:background .15s ease, transform .2s ease;
 }
-.future-observer-options-toggle:hover{background:rgba(255,255,255,.12)}
+.future-observer-options-toggle:hover{background:var(--fo-surface-2)}
 .future-observer-options-toggle.is-open{
     background:rgba(var(--fo-accent),.22);
     border-color:rgba(var(--fo-accent),.5);
@@ -280,7 +404,7 @@
     border-radius:999px;
     color:rgb(var(--fo-accent));
     background:rgba(var(--fo-accent),.12);
-    border:1px solid rgba(var(--fo-accent),.25);
+    border:1px solid rgba(var(--fo-accent),.28);
     white-space:nowrap;
 }
 
@@ -292,8 +416,8 @@
     margin:2px 14px 6px;
     padding:11px 12px;
     border-radius:12px;
-    background:rgba(255,255,255,.04);
-    border:1px solid rgba(255,255,255,.07);
+    background:var(--fo-surface);
+    border:1px solid var(--fo-line);
     max-height:46vh;
     max-height:46dvh;
     overflow-y:auto;
@@ -316,13 +440,13 @@
     padding:5px 12px;
     font-size:.82em;
     border-radius:999px;
-    border:1px solid rgba(255,255,255,.18);
-    background:rgba(255,255,255,.05);
+    border:1px solid var(--fo-line);
+    background:var(--fo-surface);
     color:inherit;
-    opacity:.8;
+    opacity:.85;
     cursor:pointer;
 }
-.future-observer-reset-btn:hover{opacity:1;background:rgba(255,255,255,.1)}
+.future-observer-reset-btn:hover{opacity:1;background:var(--fo-surface-2)}
 
 /* 作品名输入框 + 历史下拉（直接在原位置展开，不悬空，免得被面板裁掉） */
 .future-observer-fandom-work-wrap{display:flex;flex-direction:column;gap:6px;width:100%}
@@ -331,9 +455,9 @@
 .future-observer-fandom-history-list{
     max-height:140px;
     overflow-y:auto;
-    border:1px solid rgba(255,255,255,.1);
+    border:1px solid var(--fo-line);
     border-radius:10px;
-    background:rgba(255,255,255,.04);
+    background:var(--fo-surface);
 }
 .future-observer-fandom-history-item{padding:7px 11px;font-size:.88em;cursor:pointer}
 .future-observer-fandom-history-item:hover{background:rgba(var(--fo-accent),.16)}
@@ -342,8 +466,8 @@
 /* 弹窗里的历史导航和结果区 */
 .future-observer-popup .future-observer-history-nav{margin:2px 14px 0;flex-shrink:0}
 .future-observer-popup .future-observer-history-nav button{
-    background:rgba(255,255,255,.06);
-    border:1px solid rgba(255,255,255,.1);
+    background:var(--fo-surface);
+    border:1px solid var(--fo-line);
     border-radius:8px;
     color:inherit;
 }
@@ -363,8 +487,8 @@
     gap:8px;
     flex-shrink:0;
     padding:10px 14px 12px;
-    border-top:1px solid rgba(255,255,255,.07);
-    background:rgba(20,21,26,.98);
+    border-top:1px solid var(--fo-line);
+    background:var(--fo-bar-bg);
 }
 .future-observer-popup-footer .future-observer-generate-btn{
     display:block;
@@ -377,7 +501,7 @@
     font-weight:600;
     white-space:nowrap;
     text-align:center;
-    color:#101114;
+    color:var(--fo-on-accent);
     background:rgb(var(--fo-accent));
     border:none;
     cursor:pointer;
@@ -400,8 +524,8 @@
     border-radius:12px;
     font-size:14px;
     color:inherit;
-    background:rgba(255,255,255,.08);
-    border:1px solid rgba(255,255,255,.18);
+    background:var(--fo-surface-2, rgba(255,255,255,.08));
+    border:1px solid var(--fo-line, rgba(255,255,255,.18));
     cursor:pointer;
     white-space:nowrap;
 }
@@ -604,8 +728,28 @@
 .future-observer-comments-count{margin-left:auto;opacity:.6;white-space:nowrap}
 
 .future-observer-postdetail{gap:10px}
+.future-observer-postbar{
+    position:sticky;
+    top:0;
+    z-index:6;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:6px 4px;
+    background:var(--fo-bar-bg, var(--SmartThemeBlurTintColor, rgba(30,30,34,.96)));
+    border-bottom:1px solid rgba(127,127,127,.22);
+}
+.future-observer-postbar-title{
+    flex:1;
+    min-width:0;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    font-size:.82em;
+    opacity:.7;
+}
 .future-observer-postback{
-    align-self:flex-start;
+    flex-shrink:0;
     padding:4px 12px;
     font-size:.85em;
     border-radius:999px;
@@ -613,7 +757,9 @@
     background:rgba(127,127,127,.1);
     color:inherit;
     cursor:pointer;
+    white-space:nowrap;
 }
+.future-observer-postback-bottom{align-self:center;margin-top:4px}
 .future-observer-postback:hover{background:rgba(var(--fo-accent),.18)}
 .future-observer-posthead{
     padding:13px 15px;
