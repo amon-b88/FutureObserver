@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     hotComments: false, // 热评：给评论标赞数，热门的置顶（仅论坛/新闻载体）
     protagonistMode: false, // 主角是否参与讨论；关闭时主角不会出现在评论里
     protagonistName: '', // 主角名，留空=用酒馆里你的用户名
+    diagFullPrompt: false, // 诊断报告里是否附带提示词全文（会带上剧情原文，默认不带）
     maxOutputTokens: 0, // 最大输出长度，0=不指定（用接口/酒馆自己的默认值）
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
     identity: 'forum',
@@ -572,6 +573,7 @@ function buildForumPromptText(e) {
     const hotOn = !!settings.hotComments;
     const postCount = randInt(f.posts[0], f.posts[1]);
     const table = buildPostTable(postCount, settings.richness);
+    if (lastPromptMeta) { lastPromptMeta.postCount = postCount; lastPromptMeta.postTable = table; }
     const likeAttr = hotOn ? ' like="赞数"' : '';
 
     let protagonistBlock = '';
@@ -731,6 +733,14 @@ ${useLengthTable ? '【逐楼提纲】按上面的字数分配表，为每一条
 </构思>
 第二步：构思结束后，紧接着输出论坛正文，严格使用上面的输出格式。` : '';
 
+    // 记下这次随机抽到了什么，诊断报告里要用
+    lastPromptMeta = {
+        mode: settings.forumMode === 'forum' ? 'forum' : 'thread',
+        richness: settings.richness, storyChars: story.length, planMin, personaMin, personaMax,
+        angles: angles.slice(), voices: voices.slice(),
+        floorCount, replyCount, lengthTable: useLengthTable ? lengthTable : '',
+    };
+
     if (settings.forumMode === 'forum') {
         // 多帖论坛模式：用另一套提示词（公共的素材在上面已经算好）
         return buildForumPromptText({
@@ -795,8 +805,337 @@ ${story}
 ${tail}`;
 }
 
-// opts.signal: 用于取消请求；opts.onChunk(textSoFar): 传了就走流式，边收边回调累计文字
+// ==================== 诊断报告 ====================
+// 每次生成都会自动记录一份诊断报告：用了什么设置、提示词里随机抽到了什么、请求各阶段花了多久、
+// 模型有没有输出"思考"字段、怎么结束的、构思写了多少、正文写了多少、实际字数和分配表差多少……
+// 表现好和表现差的时候各复制一份发出来对比，就能看出区别在哪。
+// 报告里不含API密钥；默认不含提示词全文和剧情原文（在设置里可以选择包含）。
+const PLUGIN_VERSION = '0.19.0';
+const DIAG_STORE_KEY = 'future_observer_diag_reports';
+const DIAG_MAX_REPORTS = 6;
+let lastPromptMeta = null; // buildPrompt 每次会把"这次随机抽到了什么"记在这里
+
+let diagReports = (() => {
+    try {
+        const j = JSON.parse(localStorage.getItem(DIAG_STORE_KEY) || '[]');
+        return Array.isArray(j) ? j : [];
+    } catch {
+        return [];
+    }
+})();
+
+function saveDiagReports() {
+    try {
+        let list = diagReports.slice(-DIAG_MAX_REPORTS);
+        let json = JSON.stringify(list);
+        while (json.length > 1500000 && list.length > 1) {
+            list = list.slice(1);
+            json = JSON.stringify(list);
+        }
+        diagReports = list;
+        localStorage.setItem(DIAG_STORE_KEY, json);
+    } catch { /* 存不下就算了，内存里还有 */ }
+}
+
+function addDiagReport(text, label) {
+    diagReports.push({ time: Date.now(), label, text });
+    saveDiagReports();
+    refreshDiagUI();
+}
+
+// 复制到剪贴板。手机上酒馆常常是 http 访问，剪贴板接口会被浏览器禁用，所以准备了备用办法
+async function copyText(text) {
+    try {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch { /* 走备用办法 */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return !!ok;
+    } catch {
+        return false;
+    }
+}
+
+function newMetrics() {
+    return {
+        t0: performance.now(),
+        tHeaders: null, tFirstChunk: null, tFirstContent: null, tFirstReasoning: null,
+        tPlanEnd: null, tFirstBody: null, tEnd: null,
+        mode: null, httpStatus: null, chunks: 0, bytes: 0,
+        maxGap: 0, maxGapAt: 0, lastChunkAt: null,
+        keepAlive: 0, otherLines: 0, emptyDeltas: 0,
+        contentChars: 0, reasoningChars: 0, deltaKeys: new Set(),
+        finishReason: null, usage: null, model: null, id: null,
+        headers: {}, timeline: [], bodyKeys: '', promptChars: 0,
+    };
+}
+
+// 流式过程中，每收到一段新内容就看一眼：构思什么时候结束、正文什么时候开始
+function noteProgress(metrics, text, planExpected) {
+    if (!metrics) return;
+    const now = performance.now() - metrics.t0;
+    const closeAt = text.indexOf('</构思>');
+    if (metrics.tPlanEnd == null && closeAt >= 0) metrics.tPlanEnd = now;
+    if (metrics.tFirstBody == null) {
+        const probe = closeAt >= 0 ? text.slice(closeAt + 6) : (planExpected ? '' : text);
+        if (/<(?:post|c|main)\b/i.test(probe)) metrics.tFirstBody = now;
+    }
+}
+
+function fmtSec(ms) {
+    return Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}秒` : '—';
+}
+
+function hostOf(url) {
+    try { return new URL(String(url)).host; } catch { return String(url || '').replace(/^https?:\/\//, '').split('/')[0] || '(未填)'; }
+}
+
+// 酒馆自己的连接设置（只摘录和生成质量有关的、不含密钥和网址的几项）
+function getStInfo() {
+    try {
+        const ctx = getContext();
+        const info = { mainApi: ctx.mainApi };
+        const cc = ctx.chatCompletionSettings;
+        if (cc && typeof cc === 'object') {
+            for (const k of ['chat_completion_source', 'temp_openai', 'top_p_openai', 'openai_max_tokens', 'stream_openai', 'reasoning_effort', 'show_thoughts', 'verbosity']) {
+                if (k in cc) info[k] = cc[k];
+            }
+            const src = String(cc.chat_completion_source || '');
+            const modelKey = [`${src}_model`, 'custom_model', 'openai_model'].find(k => typeof cc[k] === 'string' && cc[k]);
+            if (modelKey) info.model = cc[modelKey];
+        }
+        return info;
+    } catch {
+        return { error: '读取酒馆设置失败' };
+    }
+}
+
+function extractPlanText(raw) {
+    const t = String(raw ?? '');
+    const close = t.indexOf('</构思>');
+    if (close < 0) {
+        const open = t.indexOf('<构思>');
+        return open >= 0 ? t.slice(open + 4) : '';
+    }
+    let body = t.slice(0, close);
+    const open = body.indexOf('<构思>');
+    if (open >= 0) body = body.slice(open + 4);
+    return body.trim();
+}
+
+function sectionLines(planText, heading) {
+    const i = planText.indexOf(heading);
+    if (i < 0) return null;
+    let rest = planText.slice(i + heading.length);
+    const next = rest.search(/【/);
+    if (next >= 0) rest = rest.slice(0, next);
+    return rest.split(/\n/).map(l => l.trim()).filter(Boolean);
+}
+
+function avg(arr) {
+    return arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+}
+
+// 汇总成一行，方便一眼对比不同的几次
+function diagSummaryLine(info) {
+    const raw = String(info.raw ?? '');
+    const planLen = measurePlanLength(raw);
+    const need = info.meta?.planMin;
+    const body = stripPlanBlock(raw);
+    const parsed = parseForumAny(body, true);
+    const x = info.metrics;
+    const parts = [
+        `构思${planLen === null ? '无' : planLen + '字'}${need ? `(要求≥${need})` : ''}`,
+        `输出共${raw.length}字`,
+        parsed.mode === 'forum' ? `帖子${parsed.posts.length}个` : `主楼${parsed.roots.length}条`,
+    ];
+    if (x) {
+        parts.push(`思考字段${x.reasoningChars}字`);
+        parts.push(`首个正文字符${fmtSec(x.tFirstContent)}`);
+        parts.push(`总耗时${fmtSec(x.tEnd)}`);
+        parts.push(`结束原因${x.finishReason ?? '未知'}`);
+    } else if (Number.isFinite(info.totalMs)) {
+        parts.push(`总耗时${fmtSec(info.totalMs)}`);
+    }
+    return parts.join(' | ');
+}
+
+function buildDiagnosticReport(info) {
+    const L = [];
+    const push = (s = '') => L.push(s);
+    const s = info.settings || {};
+    const m = info.meta || {};
+    const x = info.metrics;
+    const raw = String(info.raw ?? '');
+    const planText = extractPlanText(raw);
+    const planLen = measurePlanLength(raw);
+    const body = stripPlanBlock(raw);
+    const parsed = parseForumAny(body, true);
+
+    push('=== 观察者论坛 诊断报告 ===');
+    push(`插件版本 ${PLUGIN_VERSION}    生成时间 ${new Date(info.startedAt).toLocaleString()}    状态：${info.status}`);
+    if (info.error) push(`错误信息：${info.error}`);
+    push(`【摘要】${diagSummaryLine(info)}`);
+    push('');
+
+    push('【连接】');
+    if (info.useCustomApi) {
+        push(`通道：自定义API（流式请求）    端点域名：${hostOf(s.customApi?.endpoint)}    模型：${s.customApi?.model || '(未填)'}`);
+        push(`最大输出长度设置：${Number(s.maxOutputTokens) || 0}（0=不指定）`);
+        push(`附加请求参数：${String(s.customApi?.extraBody || '').trim() || '(无)'}`);
+        push(`请求体字段（不含内容）：${x?.bodyKeys || '?'}    提示词字数：${x?.promptChars ?? info.promptChars ?? '?'}`);
+    } else {
+        push('通道：酒馆主连接（走酒馆的预设和聊天历史，拿不到流式明细）');
+        push(`酒馆连接信息：${JSON.stringify(info.stInfo || {})}`);
+        push(`最大输出长度设置（responseLength）：${Number(s.maxOutputTokens) || 0}（0=不指定）    提示词字数：${info.promptChars ?? '?'}`);
+    }
+    push('');
+
+    push('【设置】');
+    push(`形式：${s.forumMode === 'forum' ? '多帖论坛' : '评论区'}    载体：${s.skin}    内容量：${s.richness}    先构思：${s.planFirst !== false ? '开' : '关'}    热评：${s.hotComments ? '开' : '关'}    主角参与：${s.protagonistMode ? '开' : '关'}`);
+    push(`时间方向：${s.timeDirection}    身份：${s.identity}    世界书：${s.worldInfoEnabled !== false ? '开' : '关'}    只读AI发言：${s.aiOnly ? '开' : '关'}    读取楼数：${s.messageCount ?? s.count ?? '?'}    最多字符：${s.maxChars}`);
+    push('');
+
+    push('【提示词里这次随机抽到的内容】');
+    push(`剧情原文字数：${m.storyChars ?? '?'}    构思最少字数要求：${m.planMin ?? '?'}    评论者人数要求：${m.personaMin ?? '?'}～${m.personaMax ?? '?'}`);
+    if (m.angles) push(`讨论焦点：\n${m.angles.map((a, i) => `  ${i + 1}. ${a}`).join('\n')}`);
+    if (m.voices) push(`语言风格：${m.voices.join('；')}`);
+    if (m.mode === 'forum') {
+        push(`要求帖子数：${m.postCount}\n帖子分配表：\n${m.postTable}`);
+    } else if (m.mode === 'thread') {
+        push(`要求主楼数：${m.floorCount}    跟帖约：${m.replyCount}`);
+        if (m.lengthTable) push(`字数分配表：\n${m.lengthTable}`);
+    }
+    push('');
+
+    if (x) {
+        push('【耗时与流式（自定义API）】');
+        push(`请求发出→收到响应头：${fmtSec(x.tHeaders)}    →收到第一段数据：${fmtSec(x.tFirstChunk)}`);
+        push(`→第一个正文字符：${fmtSec(x.tFirstContent)}    →第一个“思考”字符（reasoning 字段）：${fmtSec(x.tFirstReasoning)}`);
+        push(`→构思结束（出现 </构思>）：${fmtSec(x.tPlanEnd)}    →第一条评论/帖子标签：${fmtSec(x.tFirstBody)}    总耗时：${fmtSec(x.tEnd)}`);
+        push(`返回形式：${x.mode === 'sse' ? '流式（SSE）' : x.mode === 'json' ? '整段JSON（服务端没有流式）' : '未知'}    HTTP状态：${x.httpStatus ?? '?'}    数据块：${x.chunks}    字节：${x.bytes}`);
+        push(`最长一次停顿：${fmtSec(x.maxGap)}（发生在请求后第 ${fmtSec(x.maxGapAt)}）    心跳/注释行：${x.keepAlive}    其他行：${x.otherLines}    无内容的数据块：${x.emptyDeltas}`);
+        push(`流里收到的正文字数：${x.contentChars}    “思考”字段字数：${x.reasoningChars}    出现过的 delta 字段：${[...x.deltaKeys].join(',') || '(无)'}`);
+        push(`结束原因 finish_reason：${x.finishReason ?? '(没收到)'}    返回的模型名：${x.model ?? '(无)'}    响应id：${x.id ?? '(无)'}`);
+        push(`用量 usage：${x.usage ? JSON.stringify(x.usage) : '(服务端没返回；想要的话可在“附加请求参数”填 {"stream_options":{"include_usage":true}}，部分服务不支持)'}`);
+        push(`响应头（摘录）：${Object.keys(x.headers).length ? JSON.stringify(x.headers) : '(无)'}`);
+        push(`正文增长时间线（请求后秒数:累计字数）：${x.timeline.map(p => `${(p[0] / 1000).toFixed(0)}s:${p[1]}`).join('  ') || '(无)'}`);
+    } else {
+        push('【耗时】');
+        push(`总耗时：${fmtSec(info.totalMs)}（走酒馆主连接，没有分阶段数据）`);
+    }
+    push('');
+
+    push('【输出分析】');
+    push(`输出总字数：${raw.length}    是否以 <构思> 开头：${raw.trimStart().startsWith('<构思>') ? '是' : '否'}    <构思> 出现 ${(raw.match(/<构思>/g) || []).length} 次，</构思> 出现 ${(raw.match(/<\/构思>/g) || []).length} 次`);
+    push(`输出结尾是否是完整的结束标签：${/<\/(?:c|post|main)>\s*$/.test(raw.trim()) ? '是' : '否（可能被截断）'}`);
+    if (s.planFirst !== false) {
+        const need = m.planMin;
+        push(`构思字数：${planLen === null ? '没有找到完整的构思' : planLen}（要求不少于 ${need ?? '?'}${planLen !== null && need ? `，达到 ${Math.round(planLen / need * 100)}%` : ''}）`);
+        const headings = m.mode === 'forum'
+            ? ['【可讨论的细节】', '【帖子策划】', '【评论者名单】', '【互动线】', '【焦点核对】']
+            : (m.lengthTable ? ['【可讨论的细节】', '【评论者名单】', '【争论线与互动】', '【逐楼提纲】', '【焦点核对】'] : ['【可讨论的细节】', '【评论者名单】', '【争论线与互动】', '【焦点核对】']);
+        push(`构思小标题：${headings.map(h => `${h.replace(/[【】]/g, '')}${planText.includes(h) ? '✓' : '✗'}`).join('  ')}`);
+        const outlineHeading = m.mode === 'forum' ? '【帖子策划】' : '【逐楼提纲】';
+        const outline = sectionLines(planText, outlineHeading);
+        const outlineNeed = m.mode === 'forum' ? m.postCount : (m.lengthTable ? m.floorCount : null);
+        if (outlineNeed != null) push(`${outlineHeading.replace(/[【】]/g, '')}行数：${outline ? outline.length : '没有这一节'}（应有 ${outlineNeed}）`);
+        const personas = sectionLines(planText, '【评论者名单】');
+        if (personas) push(`评论者名单行数：${personas.length}（要求 ${m.personaMin}～${m.personaMax}）`);
+    }
+
+    // 去掉所有标签包着的内容后还剩多少游离文字
+    const stray = body
+        .replace(/<(c|title|body|main)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<\/?post\b[^>]*>/gi, '')
+        .replace(/\s+/g, '').length;
+    push(`标签之外的游离文字：${stray} 字    解析方式：${/<(?:post|c|main)\b/i.test(body) ? '标签格式' : '旧格式/无法识别'}`);
+    const marks = (raw.match(/\[\s*done\s*\]|<\s*done\s*>|\[\s*end\s*\]|【\s*完\s*】/gi) || []);
+    if (marks.length) push(`发现疑似结束标记：${marks.join(' ')}`);
+
+    const lens = (arr) => arr.map(i => (i.content || '').length);
+    if (parsed.mode === 'forum') {
+        push(`实际帖子数：${parsed.posts.length}（要求 ${m.postCount ?? '?'}）    评论总数：${parsed.posts.reduce((a, p) => a + p.count, 0)}`);
+        const rows = String(m.postTable || '').split('\n').map(l => l.match(/^第(\d+)帖｜(.+?)｜(热帖|普通帖|冷帖)｜楼主正文约(\d+)字｜回复约(\d+)条/)).filter(Boolean);
+        const detail = parsed.posts.map((p, i) => {
+            const plan = rows[i];
+            const cl = lens(p.flat);
+            return `  帖${i + 1}${plan ? `[${plan[3]}] 正文 计划${plan[4]}→实${p.body.length}；回复 计划${plan[5]}→实${p.count}` : ` 正文${p.body.length}；回复${p.count}`}；回复平均${avg(cl)}字，最长${cl.length ? Math.max(...cl) : 0}字`;
+        });
+        push(`逐帖（计划→实际）：\n${detail.join('\n')}`);
+    } else {
+        const roots = parsed.roots;
+        const replies = parsed.flat.length - roots.length;
+        push(`实际主楼：${roots.length} 条（要求 ${m.floorCount ?? '?'}）    跟帖：${replies} 条（要求约 ${m.replyCount ?? '?'}）`);
+        const rows = String(m.lengthTable || '').split('\n').map(l => l.match(/^第(\d+)条主楼：(长评|中评|短评)，约(\d+)字/)).filter(Boolean);
+        if (rows.length) {
+            const cmp = roots.map((r, i) => (rows[i] ? `${i + 1}:${rows[i][2][0]}${rows[i][3]}→${r.content.length}` : `${i + 1}:?→${r.content.length}`));
+            push(`逐条主楼（评论分配字数→实际字数）：${cmp.join('  ')}`);
+            const ratioOf = (tier) => {
+                const pairs = roots.map((r, i) => [rows[i], r]).filter(([row]) => row && row[2] === tier);
+                if (!pairs.length) return '—';
+                const sumT = pairs.reduce((a, [row]) => a + Number(row[3]), 0);
+                const sumA = pairs.reduce((a, [, r]) => a + r.content.length, 0);
+                return `${pairs.length}条，计划合计${sumT}→实际${sumA}（${Math.round(sumA / sumT * 100)}%）`;
+            };
+            push(`长评完成度：${ratioOf('长评')}\n中评完成度：${ratioOf('中评')}\n短评完成度：${ratioOf('短评')}`);
+        }
+        const all = lens(parsed.flat);
+        push(`所有评论字数：平均 ${avg(all)}，最短 ${all.length ? Math.min(...all) : 0}，最长 ${all.length ? Math.max(...all) : 0}；总计 ${all.reduce((a, b) => a + b, 0)} 字`);
+        const seen = new Map();
+        for (const it of parsed.flat) seen.set(it.content, (seen.get(it.content) || 0) + 1);
+        const dup = [...seen.values()].filter(n => n > 1).length;
+        if (dup) push(`重复内容：有 ${dup} 条评论的内容出现了不止一次`);
+    }
+    push('');
+
+    push('【原始输出全文】');
+    push(raw || '(空)');
+    push('【原始输出结束】');
+    if (info.includePrompt && info.promptText) {
+        push('');
+        push('【提示词全文（含剧情原文）】');
+        push(info.promptText);
+        push('【提示词结束】');
+    }
+    return L.join('\n');
+}
+
+// ---------- 设置抽屉里的"诊断报告记录"界面 ----------
+function refreshDiagUI() {
+    const $sel = $('#future-observer-diag-select');
+    if (!$sel.length) return;
+    const prev = $sel.val();
+    $sel.empty();
+    diagReports.forEach((r, i) => {
+        const when = new Date(r.time).toLocaleTimeString();
+        $sel.append($('<option></option>').val(String(i)).text(`${when} · ${r.label || ''}`));
+    });
+    if (!diagReports.length) {
+        $('#future-observer-diag-text').val('还没有诊断报告。生成一次评论区之后，这里会自动出现。');
+        return;
+    }
+    const idx = prev !== undefined && prev !== null && String(prev) !== '' && diagReports[Number(prev)] ? String(prev) : String(diagReports.length - 1);
+    $sel.val(idx);
+    $('#future-observer-diag-text').val(diagReports[Number(idx)].text);
+}
+
+// opts.signal: 用于取消请求；opts.onChunk(textSoFar): 传了就走流式，边收边回调累计文字；
+// opts.metrics: 传了就把各阶段耗时、数据块情况、结束原因等写进去（诊断报告用）
 async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
+    const mt = opts.metrics || null;
+    const T = () => performance.now() - mt.t0;
+
     let url = String(apiConfig.endpoint || '').trim();
     if (!url) {
         throw new Error('自定义API的端点URL没有填写');
@@ -827,18 +1166,34 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     }
 
     const messages = [{ role: 'user', content: prompt }];
+    const bodyObj = {
+        model: apiConfig.model || undefined,
+        ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
+        ...extra,
+        messages,
+        stream: wantStream,
+    };
+    if (mt) {
+        mt.bodyKeys = Object.keys(bodyObj).filter(k => bodyObj[k] !== undefined).join(',');
+        mt.promptChars = prompt.length;
+    }
     const response = await fetch(url, {
         method: 'POST',
         headers,
         signal: opts.signal,
-        body: JSON.stringify({
-            model: apiConfig.model || undefined,
-            ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
-            ...extra,
-            messages,
-            stream: wantStream,
-        }),
+        body: JSON.stringify(bodyObj),
     });
+    if (mt) {
+        mt.tHeaders = T();
+        mt.httpStatus = response.status;
+        try {
+            response.headers.forEach((v, k) => {
+                if (/^(content-type|server|via|x-request-id|request-id|cf-ray|openai-processing-ms|x-envoy-upstream-service-time|retry-after|x-ratelimit-.*|anthropic-ratelimit-.*)$/i.test(k)) {
+                    mt.headers[k] = String(v).slice(0, 80);
+                }
+            });
+        } catch { /* 读不到响应头就算了 */ }
+    }
 
     if (!response.ok) {
         let detail = '';
@@ -850,6 +1205,15 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     if (!wantStream || !response.body || typeof response.body.getReader !== 'function') {
         const data = await response.json();
         const content = data?.choices?.[0]?.message?.content;
+        if (mt) {
+            mt.mode = 'json';
+            mt.tEnd = T();
+            mt.usage = data?.usage ?? null;
+            mt.model = data?.model ?? null;
+            mt.id = data?.id ?? null;
+            mt.finishReason = data?.choices?.[0]?.finish_reason ?? null;
+            mt.contentChars = String(content || '').length;
+        }
         if (!content) {
             throw new Error('自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
         }
@@ -866,15 +1230,44 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
 
     const handleLine = (line) => {
         const t = line.trim();
-        if (!t.startsWith('data:')) return;
+        if (mt && t.startsWith(':')) { mt.keepAlive++; return; }
+        if (!t.startsWith('data:')) {
+            if (mt && t) mt.otherLines++;
+            return;
+        }
         const payload = t.slice(5).trim();
         if (!payload || payload === '[DONE]') return;
         try {
             const j = JSON.parse(payload);
-            const delta = j?.choices?.[0]?.delta?.content ?? j?.choices?.[0]?.message?.content;
+            const choice = j?.choices?.[0];
+            const d = choice?.delta;
+            if (mt) {
+                if (j?.model) mt.model = j.model;
+                if (j?.id) mt.id = j.id;
+                if (j?.usage) mt.usage = j.usage;
+                if (choice?.finish_reason) mt.finishReason = choice.finish_reason;
+                if (d && typeof d === 'object') {
+                    for (const k of Object.keys(d)) mt.deltaKeys.add(k);
+                    const rc = d.reasoning_content ?? d.reasoning ?? d.thinking;
+                    if (typeof rc === 'string' && rc) {
+                        mt.reasoningChars += rc.length;
+                        if (mt.tFirstReasoning == null) mt.tFirstReasoning = T();
+                    }
+                }
+            }
+            const delta = d?.content ?? choice?.message?.content;
             if (typeof delta === 'string' && delta) {
                 acc += delta;
+                if (mt) {
+                    const now = T();
+                    mt.contentChars = acc.length;
+                    if (mt.tFirstContent == null) mt.tFirstContent = now;
+                    const lastPoint = mt.timeline[mt.timeline.length - 1];
+                    if (!lastPoint || now - lastPoint[0] >= 5000) mt.timeline.push([now, acc.length]);
+                }
                 opts.onChunk(acc);
+            } else if (mt) {
+                mt.emptyDeltas++;
             }
         } catch { /* 忽略不是JSON的行（比如心跳） */ }
     };
@@ -882,11 +1275,24 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (mt) {
+            const now = T();
+            mt.chunks++;
+            mt.bytes += value?.length || 0;
+            if (mt.lastChunkAt == null) {
+                mt.tFirstChunk = now;
+            } else if (now - mt.lastChunkAt > mt.maxGap) {
+                mt.maxGap = now - mt.lastChunkAt;
+                mt.maxGapAt = mt.lastChunkAt;
+            }
+            mt.lastChunkAt = now;
+        }
         const chunk = decoder.decode(value, { stream: true });
         if (mode === null) {
             const head = chunk.trimStart();
             if (!head) continue;
             mode = head.startsWith('{') ? 'json' : 'sse';
+            if (mt) mt.mode = mode;
         }
         if (mode === 'json') {
             rawJson += chunk;
@@ -901,10 +1307,25 @@ async function callCustomApi(prompt, apiConfig, maxTokens, opts = {}) {
     }
     if (mode === 'sse' && buffer) handleLine(buffer);
 
+    if (mt) {
+        mt.tEnd = T();
+        if (acc) mt.timeline.push([mt.tEnd, acc.length]);
+    }
+
     if (mode === 'json') {
         let data;
         try { data = JSON.parse(rawJson); } catch { throw new Error('自定义API返回的内容无法解析'); }
         const content = data?.choices?.[0]?.message?.content;
+        if (mt) {
+            mt.usage = data?.usage ?? null;
+            mt.model = data?.model ?? null;
+            mt.id = data?.id ?? null;
+            mt.finishReason = data?.choices?.[0]?.finish_reason ?? null;
+            const rc = data?.choices?.[0]?.message?.reasoning_content;
+            if (typeof rc === 'string') mt.reasoningChars = rc.length;
+            mt.contentChars = String(content || '').length;
+            mt.tFirstContent = mt.tEnd;
+        }
         if (!content) {
             throw new Error(data?.error?.message || '自定义API返回内容为空，或者返回格式不是标准的 OpenAI 兼容格式');
         }
@@ -1723,7 +2144,8 @@ function rerenderResultBox($box) {
     if (raw === undefined) return;
     renderResultInto($box, raw, !!$box.data('foShowAdopt'));
     const full = $box.data('foRawFull');
-    if (full) appendRawViewer($box, full);
+    const diag = $box.data('foDiag');
+    if (full || diag) appendRawViewer($box, full, diag);
     const el = $box.get(0);
     if (el && $box.hasClass('future-observer-popup-result')) el.scrollTop = 0;
 }
@@ -1775,20 +2197,31 @@ function measurePlanLength(raw) {
     return body.trim().length;
 }
 
-function appendRawViewer($el, raw) {
+function appendRawViewer($el, raw, diagText) {
     const text = String(raw ?? '').trim();
-    if (!text) return;
-    let label = '📄 查看AI原始输出（格式出问题时可复制出来排查）';
-    const settings = getSettings();
-    if (settings.planFirst !== false) {
-        const planLen = measurePlanLength(text);
-        const need = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
-        if (planLen === null) label = '📄 查看AI原始输出（没有找到完整的构思）';
-        else label = `📄 查看AI原始输出（构思 ${planLen} 字${planLen < need * 0.6 ? `，要求不少于 ${need}，偏短` : ''}）`;
-    }
+    if (!text && !diagText) return;
     const $wrap = $('<div class="future-observer-rawwrap"></div>');
-    $wrap.append($('<span class="future-observer-rawtoggle"></span>').text(label));
-    $wrap.append($('<textarea class="future-observer-rawtext" readonly style="display:none;"></textarea>').val(text));
+    if (text) {
+        let label = '📄 查看AI原始输出（格式出问题时可复制出来排查）';
+        const settings = getSettings();
+        if (settings.planFirst !== false) {
+            const planLen = measurePlanLength(text);
+            const need = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
+            if (planLen === null) label = '📄 查看AI原始输出（没有找到完整的构思）';
+            else label = `📄 查看AI原始输出（构思 ${planLen} 字${planLen < need * 0.6 ? `，要求不少于 ${need}，偏短` : ''}）`;
+        }
+        $wrap.append($('<span class="future-observer-rawtoggle"></span>').text(label));
+        $wrap.append($('<textarea class="future-observer-rawtext" readonly style="display:none;"></textarea>').val(text));
+    }
+    if (diagText) {
+        const $row = $('<div class="future-observer-diagrow"></div>');
+        $row.append($('<span class="future-observer-diagtoggle"></span>').text('🩺 诊断报告（遇到问题时，整份复制发给开发者）'));
+        const $box = $('<div class="future-observer-diagbox" style="display:none;"></div>');
+        $box.append($('<textarea class="future-observer-diagtext" readonly></textarea>').val(diagText));
+        $box.append($('<button type="button" class="future-observer-diagcopy"></button>').text('📋 复制整份报告'));
+        $row.append($box);
+        $wrap.append($row);
+    }
     $el.append($wrap);
 }
 
@@ -1848,8 +2281,41 @@ async function generateObservation() {
         partial: '',
         renderTimer: null,
         resolveCancel: null,
+        t0: performance.now(),
+        metrics: null,
     };
     currentRun = run;
+    const startedAt = Date.now();
+
+    // 诊断报告要用到的材料：边生成边收集
+    let promptText = '';
+    let promptMeta = null;
+    const settingsSnapshot = JSON.parse(JSON.stringify({
+        ...settings,
+        customApi: { ...(settings.customApi || {}), apiKey: undefined, modelList: undefined },
+        fandomWorkHistory: undefined,
+    }));
+    const emitDiagnostic = (status, rawText, errorMsg) => {
+        try {
+            const x = run.metrics;
+            if (x && x.tEnd == null) x.tEnd = performance.now() - x.t0;
+            const info = {
+                status, error: errorMsg || '', raw: rawText || '', startedAt,
+                settings: settingsSnapshot, meta: promptMeta, metrics: x,
+                useCustomApi: run.useCustomApi, promptChars: promptText.length,
+                totalMs: performance.now() - run.t0,
+                stInfo: run.useCustomApi ? null : getStInfo(),
+                includePrompt: !!settings.diagFullPrompt,
+                promptText,
+            };
+            const text = buildDiagnosticReport(info);
+            addDiagReport(text, `${status} · ${diagSummaryLine(info)}`);
+            return text;
+        } catch (e) {
+            console.warn('[观察者论坛] 生成诊断报告失败：', e);
+            return '';
+        }
+    };
 
     setOptionsOpen(false); // 一点生成就把选项折叠起来，把空间让给评论区
     setRunningUI(true);
@@ -1858,18 +2324,25 @@ async function generateObservation() {
     try {
         const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
         const maxTokens = Number(settings.maxOutputTokens) || 0;
+        const planExpected = settings.planFirst !== false;
         let result = '';
         let failed = false;
+        let failMsg = '';
 
         try {
             const prompt = await buildPrompt(story);
+            promptText = prompt;
+            promptMeta = lastPromptMeta ? { ...lastPromptMeta } : null;
             if (run.cancelled) throw new Error('cancelled');
 
             if (run.useCustomApi) {
+                run.metrics = newMetrics();
                 result = await callCustomApi(prompt, settings.customApi, maxTokens, {
                     signal: run.abort.signal,
+                    metrics: run.metrics,
                     onChunk: (text) => {
                         run.partial = text;
+                        noteProgress(run.metrics, text, planExpected);
                         scheduleStreamRender(run);
                     },
                 });
@@ -1899,18 +2372,23 @@ async function generateObservation() {
                 if (error instanceof TypeError) {
                     msg += '（可能是网络问题，或者对方接口不支持浏览器直连的跨域访问 CORS，请检查端点地址是否正确）';
                 }
+                failMsg = msg;
                 resultBoxes.text(`生成失败：${msg}`);
                 toastr.error('观测生成失败，请打开控制台查看错误。');
             }
         }
 
-        if (failed) return;
+        if (failed) {
+            const report = emitDiagnostic('失败', run.partial, failMsg);
+            resultBoxes.each(function () { appendRawViewer($(this), run.partial, report); });
+            return;
+        }
 
         // 流式阶段到此结束：停掉还没触发的刷新，免得它盖掉下面的最终渲染
         run.finished = true;
         if (run.renderTimer) { clearTimeout(run.renderTimer); run.renderTimer = null; }
 
-        const rawOriginal = result || run.partial || ''; // 原始输出（含构思），供"查看原始输出"用
+        const rawOriginal = result || run.partial || ''; // 原始输出（含构思），供"查看原始输出"和诊断报告用
 
         if (run.cancelled) {
             // 取消：能保留多少保留多少（最后一行可能只写了一半，丢掉）
@@ -1920,18 +2398,21 @@ async function generateObservation() {
             const parsedPartial = parseForumAny(partial, false);
             if (!parsedPartial.count && !parsedPartial.mainPost) {
                 resultBoxes.text('已取消。');
+                const report = emitDiagnostic('已取消（没有可保留的内容）', rawOriginal);
+                resultBoxes.each(function () { appendRawViewer($(this), rawOriginal, report); });
                 return;
             }
             result = partial;
             toastr.info('已停止，保留了已经写好的部分。', '观察者论坛');
         }
 
+        const report = emitDiagnostic(run.cancelled ? '已停止（保留了写好的部分）' : '完成', rawOriginal);
         const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
             const $box = $(this);
-            $box.removeData('foPost').data('foRawFull', rawOriginal); // 新一轮结果：回到帖子列表
+            $box.removeData('foPost').data('foRawFull', rawOriginal).data('foDiag', report); // 新一轮结果：回到帖子列表
             renderResultInto($box, result, showAdopt);
-            appendRawViewer($box, rawOriginal);
+            appendRawViewer($box, rawOriginal, report);
         });
         $('.future-observer-popup-result').scrollTop(0);
 
@@ -2007,6 +2488,8 @@ function syncControlsFromSettings() {
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
     $('.future-observer-theme-select').val(THEME_NAMES.includes(settings.theme) ? settings.theme : 'night');
+    $('#future-observer-diag-fullprompt').prop('checked', !!settings.diagFullPrompt);
+    refreshDiagUI();
 
     $('.future-observer-direction-select').val(settings.timeDirection);
     $('.future-observer-identity-select').each(function () {
@@ -2165,6 +2648,40 @@ function bindSharedControls() {
     $(document).off('change.futureObserverProtagonistName').on('change.futureObserverProtagonistName', '.future-observer-protagonist-name', function () {
         const settings = getSettings();
         settings.protagonistName = String($(this).val() || '').trim();
+        saveSettings();
+    });
+
+    $(document).off('click.futureObserverDiagToggle').on('click.futureObserverDiagToggle', '.future-observer-diagtoggle', function () {
+        $(this).siblings('.future-observer-diagbox').toggle();
+    });
+
+    $(document).off('click.futureObserverDiagCopy').on('click.futureObserverDiagCopy', '.future-observer-diagcopy, #future-observer-diag-copy', async function () {
+        const $ta = $(this).is('#future-observer-diag-copy') ? $('#future-observer-diag-text') : $(this).siblings('.future-observer-diagtext');
+        const text = String($ta.val() || '');
+        const ok = text && await copyText(text);
+        if (ok) {
+            toastr.success('诊断报告已复制，可以直接粘贴发出。', '观察者论坛');
+        } else {
+            $ta.trigger('focus');
+            try { $ta.get(0).select(); } catch { /* 忽略 */ }
+            toastr.warning('无法自动复制：文本已全选，请长按后手动复制。', '观察者论坛');
+        }
+    });
+
+    $(document).off('change.futureObserverDiagSelect').on('change.futureObserverDiagSelect', '#future-observer-diag-select', function () {
+        const r = diagReports[Number($(this).val())];
+        $('#future-observer-diag-text').val(r ? r.text : '');
+    });
+
+    $(document).off('click.futureObserverDiagClear').on('click.futureObserverDiagClear', '#future-observer-diag-clear', function () {
+        diagReports = [];
+        saveDiagReports();
+        refreshDiagUI();
+    });
+
+    $(document).off('change.futureObserverDiagFull').on('change.futureObserverDiagFull', '#future-observer-diag-fullprompt', function () {
+        const settings = getSettings();
+        settings.diagFullPrompt = $(this).is(':checked');
         saveSettings();
     });
 

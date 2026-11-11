@@ -132,6 +132,22 @@
                 </div>
                 <div id="future-observer-result" class="future-observer-result">点击“生成评论区”查看。</div>
             </details>
+
+            <details class="future-observer-diag-details">
+                <summary>🩺 诊断报告记录（最近 6 次）</summary>
+                <div class="future-observer-hint">
+                    每次生成都会自动记录一份诊断报告：用了什么设置、提示词里随机抽到什么、各阶段花了多久、模型有没有输出“思考”、怎么结束的、构思和正文各写了多少、实际字数和分配表差多少。遇到“有时不思考、有时思考得很好”这类问题，请在表现差的一次和表现好的一次各复制一份发给开发者对比。报告里不含API密钥。
+                </div>
+                <div class="future-observer-row">
+                    <select id="future-observer-diag-select"></select>
+                    <button type="button" id="future-observer-diag-copy" class="menu_button">📋 复制所选报告</button>
+                    <button type="button" id="future-observer-diag-clear" class="menu_button">清空</button>
+                </div>
+                <textarea id="future-observer-diag-text" class="future-observer-diag-text" readonly rows="8"></textarea>
+                <div class="future-observer-row">
+                    <label><input type="checkbox" id="future-observer-diag-fullprompt"> 报告里附带提示词全文（会带上剧情原文，默认不带）</label>
+                </div>
+            </details>
         </div>
     </div>
 </div>

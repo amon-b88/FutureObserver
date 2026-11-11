@@ -770,3 +770,37 @@
 .future-observer-posthead-top{display:flex;align-items:center;gap:8px;margin-bottom:7px;flex-wrap:wrap}
 .future-observer-posttitle{font-weight:700;font-size:1.05em;line-height:1.55;margin-bottom:8px;overflow-wrap:anywhere}
 .future-observer-empty{font-size:.85em;opacity:.55;text-align:center;padding:14px 0}
+
+/* ==================== 诊断报告 ==================== */
+.future-observer-diagrow{margin-top:8px}
+.future-observer-diagtoggle{font-size:.78em;opacity:.55;cursor:pointer;text-decoration:underline dotted}
+.future-observer-diagtoggle:hover{opacity:.9}
+.future-observer-diagbox{margin-top:6px}
+.future-observer-diagtext,
+.future-observer-diag-text{
+    display:block;
+    width:100%;
+    min-height:150px;
+    padding:8px 10px;
+    font-size:.78em;
+    line-height:1.5;
+    font-family:monospace;
+    border-radius:8px;
+    border:1px solid rgba(127,127,127,.3);
+    background:rgba(0,0,0,.18);
+    color:inherit;
+    resize:vertical;
+}
+.future-observer-diagcopy{
+    margin-top:6px;
+    padding:5px 14px;
+    font-size:.85em;
+    border-radius:999px;
+    border:1px solid rgba(var(--fo-accent, 127,180,255),.5);
+    background:rgba(var(--fo-accent, 127,180,255),.14);
+    color:inherit;
+    cursor:pointer;
+}
+.future-observer-diag-details{margin-top:12px}
+.future-observer-diag-details summary{cursor:pointer;user-select:none}
+.future-observer-diag-details select{flex:1;min-width:160px;max-width:100%}
