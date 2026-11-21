@@ -31,6 +31,13 @@ const DEFAULT_SETTINGS = Object.freeze({
     hotComments: false, // 热评：给评论标赞数，热门的置顶（仅论坛/新闻载体）
     protagonistMode: false, // 主角是否参与讨论；关闭时主角不会出现在评论里
     protagonistName: '', // 主角名，留空=用酒馆里你的用户名
+    topic: '', // 讨论话题：填了之后，所有发言围绕它展开；留空=讨论剧情
+    topicHistory: [], // 最近用过的话题（最多 8 个）
+    fandomBoost: false, // 同人加强：生成前查维基资料，减少毁人设
+    fandomLibrary: {}, // 同人资料库：{ 作品名: { text, source, time, manual } }
+    devMode: false, // 开发者模式：显示完整诊断报告和AI原始输出
+    fastTokPerSec: 150, // 输出速度超过这个值（token/秒）时，提示"疑似被分到快速通道"；0=不按速度判断
+    mainRaw: false, // 走酒馆主连接时，用"原始生成"（不带预设和聊天历史）
     diagFullPrompt: false, // 诊断报告里是否附带提示词全文（会带上剧情原文，默认不带）
     maxOutputTokens: 0, // 最大输出长度，0=不指定（用接口/酒馆自己的默认值）
     timeDirection: 'future', // 'past' | 'present' | 'future' | 'otherworld'
@@ -38,7 +45,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     fandomWork: '', // 异世界·同人模式指定的作品名，留空=AI自由选择
     fandomWorkHistory: [], // 之前填过的作品名，最新的在最前面，供输入框旁边的历史下拉用
     fandomSameWorld: false, // 剧情本身就发生在这部作品的世界里（穿越/同人卡），而不是外部围观
-    theme: 'night', // 主题：'night' 暗夜（随时间方向变色）| 'paper' 纸笺 | 'sakura' 樱花 | 'starry' 星空 | 'neon' 霓虹 | 'ink' 水墨
+    theme: 'aurora', // 主题：'aurora' 极光（随时间方向变色）| 'terminal' 复古终端 | 'blueprint' 蓝图 | 'pop' 波普漫画 | 'steam' 蒸汽朋克 | 'ink' 水墨
     fabEnabled: true,
     worldInfoEnabled: true,
     fabX: null,
@@ -59,22 +66,16 @@ const DEFAULT_SETTINGS = Object.freeze({
 // 每个时间方向下拉框里可选的身份视角
 const IDENTITY_OPTIONS = {
     past: [
-        { value: 'selves', label: '当事人论坛（更早的自己）' },
-        { value: 'locals', label: '过去的路人/网友' },
-        { value: 'mixed', label: '混合模式' },
+        { value: 'selves', label: '当事人（更早的自己）' },
+        { value: 'locals', label: '旁观者（过去的路人/网友）' },
     ],
     present: [
-        { value: 'selves', label: '当事人论坛（实时）' },
-        { value: 'locals', label: '同时代路人网友' },
-        { value: 'mixed', label: '混合模式' },
+        { value: 'selves', label: '当事人（实时）' },
+        { value: 'locals', label: '旁观者（同时代路人网友）' },
     ],
     future: [
-        { value: 'forum', label: '未来网友' },
-        { value: 'historian', label: '历史学者' },
-        { value: 'descendants', label: '当事人后代' },
-        { value: 'news', label: '未来新闻' },
-        { value: 'selves', label: '当事人论坛（回忆/翻案）' },
-        { value: 'mixed', label: '混合模式' },
+        { value: 'selves', label: '当事人（多年后回忆/翻案）' },
+        { value: 'onlookers', label: '旁观者（后世网友/学者/后代/新闻）' },
     ],
     otherworld: [
         { value: 'title', label: '随机称号模式' },
@@ -82,11 +83,22 @@ const IDENTITY_OPTIONS = {
     ],
 };
 
-const DIRECTION_OPTIONS = [
-    { value: 'past', label: '过去' },
-    { value: 'present', label: '现在' },
-    { value: 'future', label: '未来' },
-    { value: 'otherworld', label: '异世界' },
+// 视角下拉框：时间方向 + 身份合成一个选择（值的格式是 "方向:身份"）
+const PERSPECTIVE_GROUPS = [
+    { label: '当事人', items: [
+        { value: 'past:selves', label: '当事人 · 过去（更早的自己）' },
+        { value: 'present:selves', label: '当事人 · 现在（实时）' },
+        { value: 'future:selves', label: '当事人 · 未来（多年后）' },
+    ] },
+    { label: '旁观者', items: [
+        { value: 'past:locals', label: '旁观者 · 过去' },
+        { value: 'present:locals', label: '旁观者 · 现在' },
+        { value: 'future:onlookers', label: '旁观者 · 未来' },
+    ] },
+    { label: '异世界', items: [
+        { value: 'otherworld:title', label: '异世界 · 随机称号' },
+        { value: 'otherworld:fandom', label: '异世界 · 同人' },
+    ] },
 ];
 
 // 时间背景说明文字
@@ -103,20 +115,14 @@ const IDENTITY_TEXT = {
     past: {
         selves: '评论者是故事里角色们更早以前的自己（不必是"少年"——具体处于人生的哪个阶段，或者这个世界观、这个种族是否存在"年龄阶段"这种概念，请你自己根据故事本身的设定判断）。他们此刻并不知道后来会发生这段故事里的事，现在"看到"了，会做出反应、互相议论，甚至互相吐槽对方以后的所作所为。',
         locals: '评论者是那个更早时代里，与主线剧情无关的普通人、路人、网友。他们完全不了解"未来"（也就是现在这段剧情）的背景设定，看到剧情里发生的事（尤其是突发、剧烈的变化）会产生五花八门的反应，不要千篇一律。可以参考但完全不限于以下反应类型（这只是灵感清单，不必照抄，也鼓励自己发挥全新的类型）：\n    - 恐慌笃信派：认定是天罚、异象、末世预兆\n    - 行动派：想要提前找出苗头、动手干预甚至除掉隐患\n    - 虚无摆烂派：看破一切，"横竖要完，不如及时行乐"\n    - 死不信派：坚持这是谣言、恶作剧、胡编的故事\n    - 投机派：盘算着怎么蹭这件事发财、出名、抢占先机\n    - 纯吃瓜派：不站队，单纯看戏起哄\n  请你根据故事本身的世界观和基调，自由挑选/设计几种合适的反应类型分配给不同评论者，不要所有人反应雷同。',
-        mixed: '评论者里既有故事角色们更早以前的自己，也有那个时代普通的路人、网友，两类人自然混杂在一起议论、争执，具体每条评论是哪一类身份由你自由决定。',
     },
     present: {
         selves: '评论者是故事里出现过的、真实存在于剧情中的角色们，此刻正处于剧情发生的同一时间线上，是当场、实时的反应——不是事后回忆，而是正在经历这一切时的辩解、争吵、吐槽。',
         locals: '评论者是与主线角色同一时代、但没有直接卷入剧情的普通人、路人、网友，是了解这个世界背景设定的"自己人"，正在实时围观这段剧情的发生，反应更像真实网友的即时吃瓜、起哄、玩梗。',
-        mixed: '评论者里既有正在经历这段剧情的当事人，也有同时代实时围观的路人网友，两者混在一起，一边是当事人的辩解，一边是路人的起哄，具体每条评论是哪一类身份由你自由决定。',
     },
     future: {
-        forum: '评论者是未来网络论坛上的普通网友、吃瓜群众、历史爱好者，互相评论、吐槽、争论。',
-        historian: '评论者是未来的历史学者、研究者，讨论史料、因果、评价与争议，语气更严谨但也可以有派系分歧。',
-        descendants: '评论者是当事人的后代，看到祖先这段历史后的吐槽、尴尬、骄傲或争论。',
-        news: '评论者是未来新闻节目里的主持人、记者、专家，讨论这段历史。',
         selves: '评论者是故事里出现过的真实角色们，但已经是许多年后的他们——是在回忆、反思，甚至试图翻案、否认、重新解释当年这段经历，语气里带着岁月沉淀后的复杂心态（可能懊悔，可能释怀，可能依然嘴硬）。',
-        mixed: '评论者身份不固定，未来网友、历史学者、当事人后代、未来新闻记者、多年后的当事人本人等不同身份自然混杂出现，各自视角不同，具体每条评论是哪一类身份由你自由决定。',
+        // onlookers 由 buildOnlookersText() 每次随机抽几种身份动态生成
     },
     otherworld: {
         title: '每个评论者都有一个自己现编、听上去很厉害/中二的称号或网名（风格类似"生命之神""邪神""世界守护者"，具体称号完全由你自由发挥、不要重复），然后按照这个称号自带的身份和调性去发言评价这段剧情——语气、立场要符合这个称号该有的"人设"，越有反差和喜感越好。这些称号是临时现编的，不对应任何真实存在的角色，不需要标注真实姓名。',
@@ -250,6 +256,13 @@ function getSettings() {
         delete settings.mode;
         delete settings.time;
     }
+
+    // v0.20：身份合并。旧的"混合""未来网友/历史学者/后代/新闻"都并入"旁观者"
+    const OLD_IDENTITY = { future: { forum: 'onlookers', historian: 'onlookers', descendants: 'onlookers', news: 'onlookers', mixed: 'onlookers' }, past: { mixed: 'locals' }, present: { mixed: 'locals' } };
+    const migrated = OLD_IDENTITY[settings.timeDirection]?.[settings.identity];
+    if (migrated) settings.identity = migrated;
+    // v0.20：主题换新，旧主题名一律换成默认的极光
+    if (!THEME_NAMES.includes(settings.theme)) settings.theme = 'aurora';
 
     // 兜底：确保 identity 在当前 timeDirection 下是个合法值
     const validIdentities = (IDENTITY_OPTIONS[settings.timeDirection] || IDENTITY_OPTIONS.future).map(o => o.value);
@@ -391,14 +404,28 @@ const DISCUSSION_ANGLES = [
     '有人提出一个站不住脚但很有意思的脑补/阴谋论，被别人逐条拆台。',
     '有人用自己的生活经验、职业或专业知识来类比这件事（要写出具体细节，不要泛泛而谈）。',
     '有人跑题，聊到完全不相干的事上，结果把一整条楼带歪了。',
-    '有人专门抬杠、揪字眼，纠结某个用词或前后细节，被别人嫌烦。',
+    '有人专门抬杠、揪字眼，纠结某个人的某句用词或前后说法，被别人嫌烦。',
     '有人认真复盘事件的前因后果，梳理时间线或因果链，并给出一个有风险的预测。',
     '有人情绪上头，语无伦次、反复追问、连发几个问号。',
-    '有人吐槽剧情里某个不合理、反常或尴尬的地方，并且说得很具体。',
+    '有人吐槽某个人离谱的决定或尴尬的举动，并且说得很具体（把它当成真事，只评价人和事）。',
     '有人转述一个道听途说的传闻或小道消息（要明确标出是传闻，不当作事实）。',
-    '有人旗帜鲜明地护着某个角色，护短护得有点夸张，惹来别人调侃。',
-    '有人发现了一个别人都没注意到的细节或前后矛盾，引发一阵惊叹或质疑。',
+    '有人旗帜鲜明地护着某个人，护短护得有点夸张，惹来别人调侃。',
+    '有人发现某个人前后说法对不上的破绽，引发一阵惊叹或质疑（当成真实发生的事来质疑）。',
     '有人提出一个很现实、很务实的问题（比如代价、后勤、后果、谁来善后），把气氛从热闹拉回现实。',
+];
+
+// 有"讨论话题"时用这一套：围绕话题本身的各种发言姿态
+const TOPIC_ANGLES = [
+    '有人旗帜鲜明地站一方，并给出具体的理由。',
+    '有人举出一个具体的例子或亲身经历来反驳对方。',
+    '有人提出折中方案或第三种可能，被两边同时嫌弃。',
+    '有人抬杠，揪住对方一个用词或前后矛盾。',
+    '有人把话题引到一个很现实的代价或后果上。',
+    '有人情绪上头，连续追问、语无伦次。',
+    '有人跑题，被别人拉回来或者干脆被带歪。',
+    '有人转述一个听来的说法（明确标出是传闻）。',
+    '有人开玩笑缓和气氛，却不小心戳到了某个人的痛处。',
+    '有人沉默了很久，最后丢下一句分量很重的话。',
 ];
 
 const VOICE_STYLES = [
@@ -500,7 +527,221 @@ async function getWorldInfoText() {
     }
 }
 
-// ==================== 多帖论坛模式 ====================
+// ==================== 同人资料（"同人加强"） ====================
+// 生成前去公开的维基类网站查一下作品和角色的介绍，作为参考资料放进提示词，减少"毁人设"。
+// 不调用AI，不额外花钱；只用浏览器能直接访问的维基接口（MediaWiki API，带 origin=* 的匿名请求允许跨域）。
+// 查到的资料会缓存在本地"资料库"里，你也可以手动改写，手动写的优先级最高。
+const FANDOM_SOURCES = [
+    { key: 'zhwiki', name: '中文维基百科', api: 'https://zh.wikipedia.org/w/api.php', prio: 4 },
+    { key: 'moegirl', name: '萌娘百科', api: 'https://zh.moegirl.org.cn/api.php', prio: 3 },
+    { key: 'jawiki', name: '日文维基百科', api: 'https://ja.wikipedia.org/w/api.php', prio: 2 },
+    { key: 'enwiki', name: '英文维基百科', api: 'https://en.wikipedia.org/w/api.php', prio: 1 },
+];
+const FANDOM_REF_MAX_CHARS = 4500;
+const FANDOM_FETCH_TIMEOUT_MS = 8000;
+
+async function wikiApi(api, params) {
+    const url = new URL(api);
+    const all = { format: 'json', origin: '*', ...params };
+    for (const [k, v] of Object.entries(all)) url.searchParams.set(k, String(v));
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), FANDOM_FETCH_TIMEOUT_MS);
+    try {
+        const r = await fetch(url.toString(), { signal: ctl.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function wikiSearchTitle(src, query, work) {
+    const data = await wikiApi(src.api, { action: 'query', list: 'search', srsearch: query, srlimit: 5, srnamespace: 0 });
+    const hits = data?.query?.search || [];
+    if (!hits.length) return null;
+    const exact = hits.find(h => String(h.title).includes(work));
+    return (exact || hits[0]).title;
+}
+
+async function wikiExtract(src, title) {
+    const data = await wikiApi(src.api, {
+        action: 'query', prop: 'extracts', explaintext: 1, exsectionformat: 'wiki', titles: title, redirects: 1,
+    });
+    const pages = data?.query?.pages || {};
+    const page = Object.values(pages)[0];
+    return String(page?.extract || '');
+}
+
+// 从整篇文章里取出"角色/登场人物"那一节；没有就取开头的简介
+function pickCharacterSection(extract) {
+    const text = String(extract || '').replace(/\r/g, '');
+    const headRe = /^==\s*(登场人物|登場人物|人物|角色|主要角色|主要人物|登场角色|登場キャラクター|キャラクター|Characters?|Main characters?|Cast)[^=\n]*==\s*$/im;
+    const m = headRe.exec(text);
+    let body = '';
+    if (m) {
+        const rest = text.slice(m.index);
+        const next = rest.slice(m[0].length).search(/^==[^=\n]/m);
+        body = next >= 0 ? rest.slice(0, m[0].length + next) : rest;
+    } else {
+        body = text.slice(0, 1800);
+    }
+    return body
+        .replace(/\[\d+\]/g, '')
+        .replace(/^=+\s*(.*?)\s*=+\s*$/gm, '【$1】')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+async function fetchFromOneSource(src, work) {
+    const mainTitle = await wikiSearchTitle(src, work, work);
+    if (!mainTitle) return { src, text: '', title: '' };
+    let text = pickCharacterSection(await wikiExtract(src, mainTitle));
+    let title = mainTitle;
+    // 主条目里没有足够的角色介绍时，再找一下"角色列表"之类的条目
+    if (text.length < 900) {
+        const listQuery = src.key === 'jawiki' ? `${work} 登場人物` : src.key === 'enwiki' ? `List of ${work} characters` : `${work} 角色列表`;
+        try {
+            const listTitle = await wikiSearchTitle(src, listQuery, work);
+            if (listTitle && listTitle !== mainTitle) {
+                const more = pickCharacterSection(await wikiExtract(src, listTitle));
+                if (more.length > text.length) { text = more; title = listTitle; }
+            }
+        } catch { /* 找不到列表条目就算了 */ }
+    }
+    return { src, text, title };
+}
+
+// 去网上查（并行问几个站，8 秒超时），挑最好的一份
+async function fetchFandomFromWeb(work) {
+    const results = await Promise.allSettled(FANDOM_SOURCES.map(src => fetchFromOneSource(src, work)));
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value.text.length >= 200).map(r => r.value);
+    if (!ok.length) {
+        const failed = results.filter(r => r.status === 'rejected').length;
+        return { text: '', source: '', note: failed === results.length ? '联网失败（所有站点都没连上）' : '没有搜到这个作品的资料' };
+    }
+    ok.sort((a, b) => (b.text.length >= 800) - (a.text.length >= 800) || b.src.prio - a.src.prio || b.text.length - a.text.length);
+    const best = ok[0];
+    let text = best.text;
+    let source = `${best.src.name}「${best.title}」`;
+    if (text.length < 1500 && ok[1]) {
+        text += `\n\n【补充：${ok[1].src.name}「${ok[1].title}」】\n${ok[1].text}`;
+        source += `、${ok[1].src.name}`;
+    }
+    if (text.length > FANDOM_REF_MAX_CHARS) text = text.slice(0, FANDOM_REF_MAX_CHARS) + '……';
+    return { text, source, note: '已联网查询' };
+}
+
+function getFandomLibrary() {
+    const settings = getSettings();
+    if (!settings.fandomLibrary || typeof settings.fandomLibrary !== 'object') settings.fandomLibrary = {};
+    return settings.fandomLibrary;
+}
+
+// 生成前调用：先看本地资料库，没有再联网查（并存进资料库）
+async function getFandomReference(settings) {
+    const work = String(settings.fandomWork || '').trim();
+    if (!work) return { text: '', source: '', note: '没有填作品名，没法查资料' };
+    const lib = getFandomLibrary();
+    const entry = lib[work];
+    if (entry && entry.text) {
+        return {
+            text: String(entry.text).slice(0, 6000),
+            source: entry.manual ? '你手动写的资料库' : (entry.source || '本地资料库'),
+            note: entry.manual ? '手动资料' : '本地缓存',
+        };
+    }
+    const fetched = await fetchFandomFromWeb(work);
+    if (fetched.text) {
+        lib[work] = { text: fetched.text, source: fetched.source, time: Date.now(), manual: false };
+        saveSettings();
+    }
+    return fetched;
+}
+
+// ==================== 当事人视角：出场角色名册 ====================
+// 当事人视角下，AI要先在构思里列出"剧情里真正出场的角色"，发言者只能从中选。
+// 显示时，如果某条发言的网名不在名册里（也不是酒馆里的角色名），就隐藏它。
+// 名册解析不出来、或者会隐藏超过七成内容时，不做任何过滤。
+
+// 名册写进历史记录的方式：一个看不见的 <roster> 标签（解析时会被忽略）
+function extractRosterFromPlan(planText) {
+    const lines = sectionLines(String(planText || ''), '【出场角色名册】');
+    if (!lines) return [];
+    const names = [];
+    for (const line of lines) {
+        const cleaned = line.replace(/^\s*(?:\d+[.、)）]|[-•·●])\s*/, '').trim();
+        const first = cleaned.split(/[｜|:：（(，,、\s]/)[0].trim();
+        if (first && first.length <= 12 && !names.includes(first)) names.push(first);
+    }
+    return names;
+}
+
+function getRosterFromText(raw) {
+    const text = String(raw ?? '');
+    const tag = text.match(/<roster>([^<]*)<\/roster>/);
+    let names = tag ? tag[1].split(/[、,，\n]/).map(x => x.trim()).filter(Boolean) : extractRosterFromPlan(extractPlanText(text));
+    if (!names.length) return [];
+    try {
+        const ctx = getContext();
+        for (const n of [ctx.name1, ctx.name2]) {
+            const t = String(n || '').trim();
+            if (t && !names.includes(t)) names.push(t);
+        }
+    } catch { /* 取不到就算了 */ }
+    return names;
+}
+
+function baseName(name) {
+    return String(name ?? '').replace(/[（(].*$/, '').trim();
+}
+
+function nameInRoster(name, roster) {
+    const b = baseName(name);
+    if (!b) return false;
+    return roster.some(r => r === b || (r.length >= 2 && b.includes(r)) || (b.length >= 2 && r.includes(b)));
+}
+
+function filterThreadBy(thread, shouldDrop) {
+    const keptRoots = [];
+    const keep = new Set();
+    for (const root of thread.roots) {
+        if (shouldDrop(root.name)) continue;
+        root.children = root.children.filter(c => !shouldDrop(c.name));
+        keptRoots.push(root);
+        keep.add(root);
+        root.children.forEach(c => keep.add(c));
+    }
+    const flat = thread.flat.filter(x => keep.has(x));
+    return { roots: keptRoots, flat, count: flat.length };
+}
+
+function applyCastFilter(parsed, roster) {
+    const drop = (name) => !nameInRoster(name, roster);
+    let total = 0;
+    let dropped = 0;
+    let out;
+    if (parsed.mode === 'forum') {
+        const posts = [];
+        for (const p of parsed.posts) {
+            total += 1 + p.count;
+            if (drop(p.name)) { dropped += 1 + p.count; continue; }
+            const th = filterThreadBy(p, drop);
+            dropped += p.count - th.count;
+            posts.push({ ...p, ...th });
+        }
+        out = { ...parsed, posts, count: posts.reduce((a, p) => a + p.count + 1, 0) };
+    } else {
+        total = parsed.flat.length;
+        const th = filterThreadBy(parsed, drop);
+        dropped = total - th.count;
+        out = { ...parsed, ...th };
+    }
+    if (total === 0 || dropped === 0) return { parsed, dropped: 0 };
+    if (dropped > total * 0.7) return { parsed, dropped: 0 }; // 会误删太多：多半是名册解析得不对，不过滤
+    return { parsed: out, dropped };
+}
+
+// ==================== 多帖论坛模式（规格） ====================
 // 评论区模式：围绕这一段剧情的一个评论区。
 // 多帖论坛模式：一次生成好几个不同主题的帖子（版块、标题、楼主正文、各自的回复），点进帖子才看到回复。
 // 一次调用生成更多内容，所以按次计费时更划算，但需要更大的"最大输出长度"。
@@ -517,20 +758,29 @@ const FORUM_SPECS = {
 };
 
 const POST_TYPES_PLOT = [
-    '剧情直接讨论（这段剧情里的某个关键事件）',
+    '事件讨论（刚发生的某件大事）',
     '细节考据（抓一个很小的细节认真分析）',
-    '人物吐槽（某个角色这波操作）',
+    '人物吐槽（某个人这波操作）',
     '预测后续（接下来会怎样）',
-    '求助提问（有人没看懂剧情里的某件事）',
+    '求助提问（有人没弄明白某件事）',
     '争议投票（A还是B，吵起来）',
     '复盘总结（梳理前因后果）',
 ];
 const POST_TYPES_WORLD = [
-    '世界冷知识/科普（和这个世界观相关）',
+    '世界冷知识/科普（和这个世界有关）',
     '八卦传闻（必须明确标出是传闻）',
-    '同人脑洞/段子（和这个世界相关）',
+    '同人脑洞/段子（和这个世界有关）',
     '论坛日常（水帖、签到、吐槽论坛本身，但要带这个世界的色彩）',
     '经验/攻略（这个世界里的人会关心的实用话题）',
+];
+const POST_TYPES_TOPIC = [
+    '立场帖（鲜明表态并给出理由）',
+    '提问帖（抛出一个与话题相关的具体疑问）',
+    '举例帖（用具体的经历或例子来论证）',
+    '反驳帖（针对某个常见观点逐条反驳）',
+    '折中帖（提出第三种看法）',
+    '吐槽帖（带着情绪讨论这个话题）',
+    '复盘帖（梳理这个话题的来龙去脉）',
 ];
 
 function pickCycle(list, n) {
@@ -540,10 +790,19 @@ function pickCycle(list, n) {
 }
 
 // 由代码给每个帖子分配：类型、热度、楼主正文字数、回复条数。比让AI自己决定更不容易千篇一律或缩水。
-function buildPostTable(count, richness) {
+// kind: 'mixed' 约六成围绕事件、四成世界里的其他话题；'plot' 全部围绕事件；'topic' 全部围绕用户指定的话题
+function buildPostTable(count, richness, kind = 'mixed') {
     const f = FORUM_SPECS[richness] || FORUM_SPECS.rich;
-    const plotN = Math.max(1, Math.round(count * 0.6));
-    const types = pickRandom([...pickCycle(POST_TYPES_PLOT, plotN), ...pickCycle(POST_TYPES_WORLD, count - plotN)], count);
+    let types;
+    if (kind === 'topic') {
+        types = pickCycle(POST_TYPES_TOPIC, count);
+    } else if (kind === 'plot') {
+        types = pickCycle(POST_TYPES_PLOT, count);
+    } else {
+        const plotN = Math.max(1, Math.round(count * 0.6));
+        types = [...pickCycle(POST_TYPES_PLOT, plotN), ...pickCycle(POST_TYPES_WORLD, count - plotN)];
+    }
+    types = pickRandom(types, count);
     const hotN = Math.max(1, Math.round(count * 0.3));
     const coldN = count >= 4 ? Math.max(1, Math.round(count * 0.2)) : 0;
     const heats = pickRandom([
@@ -566,56 +825,265 @@ function buildPostTable(count, richness) {
     }).join('\n');
 }
 
-// 多帖论坛模式的完整提示词。公共部分（身份、世界书、讨论焦点等）由 buildPrompt 算好传进来。
-function buildForumPromptText(e) {
-    const { settings, direction, identityText, protagonist, worldInfoBlock, angleText, voiceText, planMin, personaMin, personaMax, story } = e;
-    const f = FORUM_SPECS[settings.richness] || FORUM_SPECS.rich;
-    const hotOn = !!settings.hotComments;
-    const postCount = randInt(f.posts[0], f.posts[1]);
-    const table = buildPostTable(postCount, settings.richness);
-    if (lastPromptMeta) { lastPromptMeta.postCount = postCount; lastPromptMeta.postTable = table; }
-    const likeAttr = hotOn ? ' like="赞数"' : '';
+// ==================== 提示词的各个组成部分 ====================
 
-    let protagonistBlock = '';
-    if (protagonist) {
-        protagonistBlock = settings.protagonistMode
-            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在这个论坛里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（发帖和回复合计），而且不能连续两次都是他。\n- 每次发言二选一：在某个帖子里发表自己对这件事的感想；或者回复某个具体的人（用 to 属性指明回复的是哪一条）。他自己发帖也行，但最多一个。\n- 不要每个帖子都出现他，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
-            : `\n\n【主角回避】\n故事的主角是「${protagonist}」。论坛里不得出现主角本人（既不能发帖也不能回复），也不要以他的身份或口吻发言；帖子和回复里需要提到他时，只能以第三方的口吻谈论他。`;
+// 沉浸规则：评论者把一切当作真实发生过的事，不许跳出来评价"这是个故事"
+const IMMERSION_BLOCK = `【沉浸规则——一律把这些事当成真的已经发生过的事】
+- 所有发言者都身处这个世界之中，把剧情里的一切当作真实发生过的事件来讨论，只评价“人和事”：谁做了什么、为什么、值不值、后果如何。
+- 严禁跳出事件本身去评价“这是一个故事”：不得出现“作者”“编剧”“读者”“水字数”“剧情杀”“设定崩了”“降智”“机械降神”“工具人”“文笔”“这是小说/剧本”之类的话，也不得吐槽“剧情”“设定”本身，更不得用“这不符合物理定律/科学/常理/逻辑”“太扯了”这种方式质疑事件本身能不能成立。
+- 对离谱的事，可以惊讶、质疑、嘲笑某个人的行为或某个人的说法，但要站在“这件事真的发生了”的前提上（例如“他怎么敢这么干”“这种伤他居然还能撑住，是不是用了什么手段”），而不是质疑这件事能不能被写出来。
+- 角色之间对人物选择的争论、“这步棋太险了”这类世界之内的评价，照常允许。`;
+
+function buildTopicBlock(topic, isForum) {
+    if (!topic) return '';
+    return `\n\n【讨论话题——所有发言都围绕它展开】
+本次的讨论话题是：「${topic}」
+- 所有${isForum ? '帖子和回复' : '评论'}都要围绕这个话题展开：赞同、反对、补充、质疑、举例、被带跑题后又被拉回来都可以，但不能无视话题去讨论别的事。
+- 剧情片段只作为背景和论据，发言者可以引用剧情里的具体细节来支持自己的立场。
+- 发言者的立场要有分歧，不要全员同一种看法。${isForum ? '\n- 每个帖子是这个话题的一个不同切入角度，标题要体现这个角度。' : ''}`;
+}
+
+// 当事人视角：只有剧情里实际出场的人能发言
+function buildCastBlock(isForum, castNames) {
+    const hint = castNames.length
+        ? `\n- 酒馆里记录的角色名：${castNames.join('、')}（如果他们在这段剧情里确实出场，可以作为发言者）。`
+        : '';
+    return `\n\n【发言者限定——只有故事里出场的当事人能发言】
+- 所有发言者只能是剧情片段里实际出场的角色（有名字或明确称呼的人）。严禁编造路人、网友、围观群众、旁白，或任何剧情里没有出现过的人。
+- 出场的人可能很少，甚至只有一两位：这完全没问题。一个人可以连续发很多条，对很多件事分别做出回应，也可以自己跟自己争论、前后自我反驳。不要为了凑人数而增加发言者。${hint}
+- 发言者的${isForum ? '网名（by 属性）' : '网名'}直接写角色的名字，不要加称号。${isForum ? '\n- 所有帖子都必须围绕这段经历本身，不要出现“世界里的其他话题”“论坛日常”这类与当事人无关的帖子。' : ''}`;
+}
+
+function buildProtagonistBlock(settings, protagonist, isForum, noReplies) {
+    if (!protagonist) return '';
+    if (settings.protagonistMode) {
+        return `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在${isForum ? '这个论坛' : '评论者'}里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（${isForum ? '发帖和回复' : '主楼和跟帖'}合计），而且不能连续两次都是他。\n- 每次发言二选一：发表自己对这件事的感想；或者回复${isForum ? '某个帖子里' : '论坛里'}某个具体的人${noReplies ? '（此载体没有跟帖，直接在内容里点名对方）' : '（用 to 属性指明回复的是哪一条）'}。${isForum ? '他自己发帖也行，但最多一个。' : ''}\n- 不要每条都去回复，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`;
     }
+    return `\n\n【主角回避】\n故事的主角是「${protagonist}」。${isForum ? '论坛里不得出现主角本人（既不能发帖也不能回复）' : '评论者里不得出现主角本人'}，也不要以他的身份或口吻发言；需要提到他时，只能以第三方的口吻谈论他。`;
+}
 
-    const likeExamples = hotOn ? ['256', '31', '4'] : [null, null, null];
-    const ex = (v) => (v ? ` like="${v}"` : '');
-    const formatBlock = `【输出格式——必须严格遵守，程序靠这个格式识别帖子和楼层】
+// 未来·旁观者：每次随机抽几种"后世人"的身份混着来，免得一成不变
+const ONLOOKER_FLAVORS = [
+    '未来网络论坛上的普通网友、吃瓜群众、历史爱好者，互相评论、吐槽、争论',
+    '未来的历史学者、研究者，讨论史料、因果、评价与争议，语气更严谨但也可以有派系分歧',
+    '当事人的后代，看到祖先这段历史后的吐槽、尴尬、骄傲或争论',
+    '未来新闻节目里的主持人、记者、专家，评述这段历史',
+];
+
+function buildOnlookersText() {
+    const picks = pickRandom(ONLOOKER_FLAVORS, 3);
+    return `评论者是很久以后的人，在回望这段已经成为历史的事。本次出场的身份有：\n${picks.map(p => `- ${p}`).join('\n')}\n具体每条发言是哪一类由你自由分配，各类人的视角和语气要有区别。`;
+}
+
+// 同人资料块（有资料才加）
+function buildFandomRefBlock(ref) {
+    const rules = '- 发言角色必须是资料里出现过的、或你确信属于该作品的角色；性格、口头禅、人物关系、能力与身份必须符合资料，不要让角色说出不符合其人设的话；拿不准的角色宁可不用。';
+    if (ref && ref.text) {
+        return `\n\n【原作资料（来自${ref.source || '资料库'}，用来核对人设；不要照抄，也不要把资料当成发生在这段剧情里的事）】\n${ref.text}\n${rules}`;
+    }
+    return `\n\n【同人角色要求】\n${rules}`;
+}
+
+// 构思模板：不同情况下小标题略有不同
+function buildPlanSections(o) {
+    const heads = [];
+    heads.push(o.topic
+        ? ['【可讨论的角度】', '围绕话题，列出至少8个可以展开的论点、例子或反例，每条写明可以引用剧情里哪个具体细节。']
+        : ['【可讨论的细节】', '至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。']);
+    if (o.isForum) {
+        heads.push(['【帖子策划】', '按上面的帖子分配表，为每个帖子各写一行：第几帖｜版块｜标题（要像真实论坛标题，可以标题党）｜楼主网名与身份｜楼主想说的 2～3 个要点｜这个帖子下会吵起来的点。']);
+    }
+    if (o.selves) {
+        heads.push(['【出场角色名册】', '只列剧情片段里真正出场的角色，每人一行：名字｜他在这段经历里做了什么｜他此刻的情绪与立场｜他大概会发几条。不许出现剧情里没有的人；人少没关系，一个人可以发很多条。']);
+    } else {
+        heads.push(['【评论者名单】', `${o.personaMin}～${o.personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。要彼此差异明显，包括立场对立的人。${o.isForum ? '同一位评论者可以在不同帖子里反复出现（网名和人设要保持一致）。' : ''}`]);
+    }
+    if (o.fandom) {
+        heads.push(['【角色设定回顾】', '为每位将要发言的角色各写几句：他在原作里的身份与性格、说话的口癖、与其他发言角色的关系、此刻处在原作的哪个阶段。后面的发言必须符合这里写的设定。']);
+    }
+    heads.push(o.isForum
+        ? ['【互动线】', '每个帖子里谁会反驳谁、谁会接谁的梗、谁会把话题带偏。']
+        : ['【争论线与互动】', `至少3条会吵起来的争论线，几个跑题/玩梗/脑补点，以及${o.noReplies ? '谁会接谁的梗' : '楼中楼里谁会接谁的话'}。`]);
+    if (o.useLengthTable) {
+        heads.push(['【逐楼提纲】', '按上面的字数分配表，为每一条主楼各写一行：第几条｜网名｜针对剧情里哪个具体细节｜立场｜准备说的 2～3 个要点（长评要写出论证的层次，说清先说什么、再说什么、最后落在哪）。']);
+    }
+    heads.push(['【焦点核对】', '逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。']);
+    return heads;
+}
+
+function buildPlanBlock(o) {
+    if (!o.planFirst) return { text: '', headings: [] };
+    const heads = buildPlanSections(o);
+    const text = `\n\n【写作步骤——分两步】
+第一步：先输出 <构思> 和 </构思> 两个标签之间的构思。这部分程序会自动删掉、读者看不到，所以请写得充分、具体，不要偷懒：构思部分不少于 ${o.planMin} 字，绝对不能只写一两句话。请按下面的小标题逐项填写（构思里可以不遵守输出格式）：
+<构思>
+${heads.map(([h, d]) => `${h}${d}`).join('\n')}
+</构思>
+第二步：构思结束后，紧接着输出${o.isForum ? '所有帖子' : '论坛正文'}，严格使用上面的输出格式。`;
+    return { text, headings: heads.map(([h]) => h) };
+}
+
+function buildThreadFormatBlock(skin, hotOn) {
+    const likeAttr = (v) => (hotOn ? ` like="${v}"` : '');
+    const lines = skin.noReplies
+        ? [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" by="某某"${likeAttr(2315)}>……</c>`]
+        : [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" to="2" by="某某"${likeAttr(2315)}>……</c>`, `<c n="4" to="3" by="某某"${likeAttr(41)}>……</c>`, `<c n="5" by="某某"${likeAttr(0)}>……</c>`];
+    return `【输出格式——必须严格遵守，程序靠这个格式识别楼层】
+每条评论用一对 <c> 标签包起来，格式固定为：
+主楼：<c n="楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>${skin.noReplies ? '' : `\n跟帖：<c n="楼层编号" to="被回复的楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>`}
+示例：
+${lines.join('\n')}
+- n 从1开始连续递增${skin.noReplies ? '' : '，主楼和跟帖共用同一个编号序列；跟帖的 to 填它回应的那一楼的编号（可以是主楼，也可以是另一条跟帖）。被回复的编号只能写在 to 属性里，不要把“to 3楼”“回复3楼”这类文字写进评论内容里'}。
+${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数很高（几百到几千），大多数只有个位数到几十，个别是0；赞数要和评论的质量、争议度、梗的好笑程度相符——吵得凶的、有洞察的、有梗的更高；跟帖的赞数一般比主楼低。\n' : ''}- 属性值一律用英文双引号，网名里不要出现双引号和 < > 符号；评论内容里不要出现 </c> 这样的标签文字。
+- 评论内容可以分段换行，但必须全部写在这一对 <c> 标签里面。
+- 除了这些标签，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
+}
+
+function buildForumFormatBlock(hotOn) {
+    const ex = (v) => (hotOn ? ` like="${v}"` : '');
+    return `【输出格式——必须严格遵守，程序靠这个格式识别帖子和楼层】
 论坛由多个帖子组成，每个帖子用 <post> 标签包起来，结构固定如下：
-<post id="1" board="版块名" by="楼主网名"${ex(likeExamples[0])}>
+<post id="1" board="版块名" by="楼主网名"${ex(256)}>
 <title>帖子标题</title>
 <body>楼主正文</body>
-<c n="1" by="网名"${ex(likeExamples[1])}>回复内容</c>
-<c n="2" to="1" by="网名"${ex(likeExamples[2])}>对1楼的回复内容</c>
+<c n="1" by="网名"${ex(31)}>回复内容</c>
+<c n="2" to="1" by="网名"${ex(4)}>回复内容（被回复的编号只写在 to 属性里，内容里不要再写“to 1楼”）</c>
 </post>
 - 帖子之间不要写任何别的文字。每个帖子的回复编号 n 从 1 开始连续递增（每个帖子重新从 1 算起）；to 只在回复某一条回复时才写，填被回复那一条的编号（可以是楼主下的第一层回复，也可以是另一条跟帖）。
-- 版块名由你根据这个世界观自拟（比如剧情讨论、八卦区、考据区、水区之类），同一个版块可以出现多次。
+- 版块名由你根据这个世界观自拟（比如考据区、八卦区、水区、吵架区之类，不要叫“剧情区”“小说区”），同一个版块可以出现多次。
 ${hotOn ? '- 赞数是纯整数，帖子和回复都要标。分布要像真实论坛：热帖几百到几千，普通帖几十，冷帖个位数；回复的赞数一般比帖子低，吵得凶的、有梗的、有洞察的更高。\n' : ''}- 属性值一律用英文双引号，网名和标题里不要出现双引号和 < > 符号；正文和回复里不要出现 </c>、</post> 这样的标签文字。
 - 楼主正文和回复内容可以分段换行，但必须全部写在对应的标签里面。
 - 除了这些标签，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
+}
 
-    const planBlock = settings.planFirst !== false ? `
+// ==================== 总装：构造完整提示词 ====================
+async function buildPrompt(story) {
+    const settings = getSettings();
+    const isForum = settings.forumMode === 'forum';
+    const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
+    const identity = settings.identity;
+    const selves = identity === 'selves' && direction !== 'otherworld'; // 当事人视角：只有剧情里出场的人能发言
+    const fandom = direction === 'otherworld' && identity === 'fandom';
+    const topic = String(settings.topic || '').trim().slice(0, 200);
+    const spec = getRichnessSpec(settings);
+    const skin = isForum ? SKIN_SPECS.forum : getSkinSpec(settings);
+    const protagonist = getProtagonistName();
+    const hotOn = isForum ? !!settings.hotComments : (!!settings.hotComments && skin.hotAllowed);
+    const [personaMin, personaMax] = spec.personas;
+    const angles = pickRandom(topic ? TOPIC_ANGLES : DISCUSSION_ANGLES, spec.angles);
+    const voices = pickRandom(VOICE_STYLES, 5);
+    const planMin = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
+    const planFirst = settings.planFirst !== false;
 
-【写作步骤——分两步】
-第一步：先输出 <构思> 和 </构思> 两个标签之间的构思。这部分程序会自动删掉、读者看不到，所以请写得充分、具体，不要偷懒：构思部分不少于 ${planMin} 字，绝对不能只写一两句话。请按下面的小标题逐项填写（构思里可以不遵守输出格式）：
-<构思>
-【可讨论的细节】至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。
-【帖子策划】按上面的帖子分配表，为每个帖子各写一行：第几帖｜版块｜标题（要像真实论坛标题，可以标题党）｜楼主网名与身份｜楼主想说的 2～3 个要点｜这个帖子下会吵起来的点。
-【评论者名单】${personaMin}～${personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。同一位评论者可以在不同帖子里反复出现（网名和人设要保持一致），立场对立的人要有。
-【互动线】每个帖子里谁会反驳谁、谁会接谁的梗、谁会把话题带偏。
-【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
-</构思>
-第二步：构思结束后，紧接着输出所有帖子，严格使用上面的输出格式。` : '';
+    // 身份说明
+    let identityText;
+    if (fandom) {
+        identityText = buildFandomIdentityText(settings.fandomWork, settings.fandomSameWorld);
+    } else if (direction === 'future' && identity === 'onlookers') {
+        identityText = buildOnlookersText();
+    } else {
+        const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
+        identityText = identityTable[identity] || Object.values(identityTable)[0];
+    }
 
-    const formatReminder = '（格式提醒：全部内容必须用 <post>…</post> 包住每个帖子，帖子里用 <title>、<body> 和 <c>…</c> 标签，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）';
-    const tail = settings.planFirst !== false
-        ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写所有帖子：\n<构思>`
-        : `${formatReminder}\n\n【观察者论坛】`;
+    // 同人加强：生成前查资料（失败不影响生成，只是少一份参考）
+    let fandomRef = { text: '', source: '', note: '' };
+    if (fandom && settings.fandomBoost) {
+        try {
+            fandomRef = await getFandomReference(settings);
+        } catch (e) {
+            console.warn('[观察者论坛] 查同人资料失败：', e);
+            fandomRef = { text: '', source: '', note: '查资料出错' };
+        }
+    }
+
+    const worldInfoText = settings.worldInfoEnabled !== false ? await getWorldInfoText() : '';
+    const worldInfoBlock = worldInfoText
+        ? `\n【世界设定参考】（背景知识，不是新发生的剧情，仅用于帮助理解剧情里的名词和背景）\n${worldInfoText}\n`
+        : '';
+
+    let castNames = [];
+    try {
+        const ctx = getContext();
+        castNames = [ctx.name1, ctx.name2].map(x => String(x || '').trim()).filter(Boolean)
+            .filter(n => settings.protagonistMode || !protagonist || n !== protagonist); // 没开"主角参与"时，主角不能发言，就别当成可选发言者
+    } catch { /* 取不到就不提示 */ }
+
+    const protagonistBlock = buildProtagonistBlock(settings, protagonist, isForum, skin.noReplies);
+    const topicBlock = buildTopicBlock(topic, isForum);
+    const castBlock = selves ? buildCastBlock(isForum, castNames) : '';
+    const fandomBlock = fandom ? buildFandomRefBlock(fandomRef) : '';
+    const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
+    const voiceText = voices.map(v => `- ${v}`).join('\n');
+
+    // 公共的"严格规则"
+    const rule5 = topic
+        ? `大家围绕上面的“讨论话题”展开，剧情只作背景和论据。`
+        : (isForum
+            ? (selves
+                ? '所有帖子都直接围绕这段经历中真正发生的事件、人物行为和结果。'
+                : '大约六成的帖子直接围绕这段剧情中真正发生的事件、人物行为和结果；其余帖子是这个世界里与之相关的其他话题或论坛日常，要和这个世界观相容。')
+            : '评论重点放在这段剧情中真正发生的事件、人物行为和结果。');
+    const rule6 = selves
+        ? '发言者只能是剧情里出场的当事人（见“发言者限定”）。'
+        : '除非身份设定限定了发言者的范围，否则发言者之间身份要有明显差异。';
+    const who = isForum ? '帖子和评论' : '评论';
+
+    // 计划 / 格式 / 数量
+    let planOpts = { planFirst, planMin, isForum, topic: !!topic, selves, fandom, personaMin, personaMax, noReplies: skin.noReplies, useLengthTable: false };
+    let formatBlock;
+    let quantityBlock;
+    let reminder;
+    let closing;
+
+    if (isForum) {
+        const f = FORUM_SPECS[settings.richness] || FORUM_SPECS.rich;
+        const postCount = randInt(f.posts[0], f.posts[1]);
+        const table = buildPostTable(postCount, settings.richness, topic ? 'topic' : (selves ? 'plot' : 'mixed'));
+        formatBlock = buildForumFormatBlock(hotOn);
+        quantityBlock = `【数量与分配】
+- 生成 ${postCount} 个帖子。下面是程序随机分配的帖子分配表，请严格按表写：类型、热度、楼主正文字数、回复条数都要达到，标"热帖"的要热闹（回复多、有人吵起来），标"冷帖"的就是没几个人理。每个帖子的回复要有长有短，不要都是一两句话。帖子的先后顺序就按表里的顺序。
+${table}`;
+        reminder = '（格式提醒：全部内容必须用 <post>…</post> 包住每个帖子，帖子里用 <title>、<body> 和 <c>…</c> 标签，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）';
+        closing = '【观察者论坛】';
+        lastPromptMeta = { mode: 'forum', postCount, postTable: table };
+    } else {
+        const floorMin = Math.max(5, Math.round(spec.floors[0] * skin.floorMul));
+        const floorMax = Math.max(floorMin, Math.round(spec.floors[1] * skin.floorMul));
+        const replyMin = skin.noReplies ? 0 : Math.max(1, Math.round(spec.replies[0] * skin.replyMul));
+        const replyMax = skin.noReplies ? 0 : Math.max(replyMin, Math.round(spec.replies[1] * skin.replyMul));
+        const floorCount = randInt(floorMin, floorMax); // 这一次具体要写多少条主楼，由代码定，不让AI自己挑
+        const replyCount = skin.noReplies ? 0 : randInt(replyMin, replyMax);
+        const useLengthTable = !skin.lengthText;
+        const lengthTable = useLengthTable ? buildLengthTable(floorCount, settings.richness) : '';
+        planOpts = { ...planOpts, useLengthTable };
+        formatBlock = buildThreadFormatBlock(skin, hotOn);
+        quantityBlock = `【数量与长度】
+- 生成 ${floorCount} 条主楼评论${skin.noReplies ? '' : `；另外再写 ${replyCount} 条左右的楼中楼跟帖（跟帖不算在主楼数量里）`}。
+${useLengthTable
+    ? `- 下面是程序随机分配的字数分配表，请严格按表写每一条主楼：标"长评"的必须真的写到约定字数（有具体论证、细节、前因后果，不能用一两句话敷衍），只有标"短评"的才可以一两句话。主楼的发布顺序就按表里的顺序。
+${lengthTable}
+- 跟帖以一两句话为主（20～80字），其中 1～2 条可以展开写（100～200字）。`
+    : `- 字数安排：${skin.lengthText}。`}`;
+        reminder = '（格式提醒：论坛正文必须全部用 <c n=… by=…>…</c> 标签写，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）';
+        closing = '【观察者评论】';
+        lastPromptMeta = { mode: 'thread', floorCount, replyCount, lengthTable: useLengthTable ? lengthTable : '' };
+    }
+
+    const plan = buildPlanBlock(planOpts);
+    Object.assign(lastPromptMeta, {
+        richness: settings.richness, storyChars: story.length, planMin, personaMin, personaMax,
+        angles: angles.slice(), voices: voices.slice(), planHeadings: plan.headings,
+        selves, topic, fandom, fandomRefChars: fandomRef.text.length, fandomRefSource: fandomRef.source || '', fandomRefNote: fandomRef.note || '',
+    });
+
+    const tail = planFirst
+        ? `${plan.text}\n\n${reminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写${isForum ? '所有帖子' : '论坛正文'}：\n<构思>`
+        : `${reminder}\n\n${closing}`;
+
+    const intro = isForum
+        ? '请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一个与当前主线完全分离的"观察者论坛"：它不是单一的评论区，而是一个有多个帖子的论坛首页。'
+        : '请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一段与当前主线完全分离的"观察者论坛"评论区。';
 
     return `你是"观察者论坛"。
 
@@ -623,30 +1091,29 @@ ${hotOn ? '- 赞数是纯整数，帖子和回复都要标。分布要像真实�
 ${DIRECTION_TEXT[direction]}
 
 【评论者身份】
-${identityText}
-
-请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一个与当前主线完全分离的"观察者论坛"：它不是单一的评论区，而是一个有多个帖子的论坛首页。
+${identityText}${fandomBlock}
+${!isForum && skin.promptText ? '\n' + skin.promptText + '\n' : ''}
+${intro}
 
 【严格规则】
 1. 这不是主线续写，不得继续当前剧情。
-2. 这个论坛不会被当前任何角色看到，不得改变当前世界状态。
-3. 不得把帖子和评论中的推测当成事实，也不得凭空补充关键剧情；传闻、八卦必须明确标出是传闻。
+2. 这${isForum ? '个论坛' : '些评论'}不会被当前任何角色看到，不得改变当前世界状态。
+3. 不得把${who}中的推测当成事实，也不得凭空补充关键剧情${isForum ? '；传闻、八卦必须明确标出是传闻' : ''}。
 4. 可以出现误解、争论、玩梗、不同立场；发言者可以理解错，但不要让所有人都同一种看法。
-5. 大约六成的帖子直接围绕这段剧情中真正发生的事件、人物行为和结果；其余帖子是这个世界里与之相关的其他话题或论坛日常，要和这个世界观相容。
-6. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则发言者之间身份要有明显差异。
+5. ${rule5}
+6. ${rule6}
 7. 不要出现"作为AI""提示词""主线"等元话语。
 8. 最后不要总结，不要解释生成过程。
 
-【数量与分配】
-- 生成 ${postCount} 个帖子。下面是程序随机分配的帖子分配表，请严格按表写：类型、热度、楼主正文字数、回复条数都要达到，标"热帖"的要热闹（回复多、有人吵起来），标"冷帖"的就是没几个人理。每个帖子的回复要有长有短，不要都是一两句话。帖子的先后顺序就按表里的顺序。
-${table}
+${IMMERSION_BLOCK}${topicBlock}${castBlock}
+
+${quantityBlock}
 
 【质量要求——避免千篇一律】
-- 每个帖子的标题要像真实论坛里会有的标题，各不相同，不要都是"关于……的讨论"。
-- 每个帖子和回复至少抓住一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
+${isForum ? '- 每个帖子的标题要像真实论坛里会有的标题，各不相同，不要都是"关于……的讨论"。\n' : ''}- 每${isForum ? '个帖子和回复' : '条评论'}至少抓住一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
 - 不要每条都走"先复述剧情→再表态→再总结升华"的三段式；不要用"这或许就是……""这正是……的意义"这类金句或升华来收尾；少用排比、对仗这类整齐的句子。
 - 每位发言者要有自己的说话习惯、关心的点和立场，不要所有人用同样的句式和语气。
-- 帖子下面要有互动：有人点名反驳、有人接梗、有人被带偏，还可以出现回复回复。
+${isForum ? '- 帖子下面要有互动：有人点名反驳、有人接梗、有人被带偏，还可以出现回复回复。' : (skin.noReplies ? '- 评论者之间要有呼应：有人接梗、有人跟风复读、有人被带偏。' : '- 评论者之间要有互动：有人点名反驳、有人接梗、有人被带偏。热门楼层可以有 2～4 条跟帖，还可以出现跟帖回复跟帖；冷门楼层可以没人理。')}
 - 同一个开头词或口头禅，整个论坛里最多出现两次。
 - 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。${protagonistBlock}
 
@@ -664,153 +1131,12 @@ ${story}
 ${tail}`;
 }
 
-async function buildPrompt(story) {
-    const settings = getSettings();
-    const direction = DIRECTION_TEXT[settings.timeDirection] ? settings.timeDirection : 'future';
-    const spec = getRichnessSpec(settings);
-    const skin = getSkinSpec(settings);
-    const floorMin = Math.max(5, Math.round(spec.floors[0] * skin.floorMul));
-    const floorMax = Math.max(floorMin, Math.round(spec.floors[1] * skin.floorMul));
-    const replyMin = skin.noReplies ? 0 : Math.max(1, Math.round(spec.replies[0] * skin.replyMul));
-    const replyMax = skin.noReplies ? 0 : Math.max(replyMin, Math.round(spec.replies[1] * skin.replyMul));
-    const hotOn = !!settings.hotComments && skin.hotAllowed;
-    const protagonist = getProtagonistName();
-    const floorCount = randInt(floorMin, floorMax); // 这一次具体要写多少条主楼，由代码定，不让AI自己挑
-    const replyCount = skin.noReplies ? 0 : randInt(replyMin, replyMax);
-    const useLengthTable = !skin.lengthText;
-    const lengthTable = useLengthTable ? buildLengthTable(floorCount, settings.richness) : '';
-    const [personaMin, personaMax] = spec.personas;
-    const angles = pickRandom(DISCUSSION_ANGLES, spec.angles);
-    const voices = pickRandom(VOICE_STYLES, 5);
-
-    let identityText;
-    if (direction === 'otherworld' && settings.identity === 'fandom') {
-        identityText = buildFandomIdentityText(settings.fandomWork, settings.fandomSameWorld);
-    } else {
-        const identityTable = IDENTITY_TEXT[direction] || IDENTITY_TEXT.future;
-        identityText = identityTable[settings.identity] || Object.values(identityTable)[0];
-    }
-
-    const worldInfoText = settings.worldInfoEnabled !== false ? await getWorldInfoText() : '';
-    const worldInfoBlock = worldInfoText
-        ? `\n【世界设定参考】（背景知识，不是新发生的剧情，仅用于帮助理解剧情里的名词和背景）\n${worldInfoText}\n`
-        : '';
-
-    let protagonistBlock = '';
-    if (protagonist) {
-        protagonistBlock = settings.protagonistMode
-            ? `\n\n【主角参与】\n故事的主角「${protagonist}」本人也混在评论者里。要求：\n- 他的网名直接写「${protagonist}」，用符合他性格的口吻发言。\n- 全场他最多发言 2 次（主楼和跟帖合计），而且不能连续两条都是他。\n- 每次发言二选一：发表自己对这件事的感想；或者回复论坛里某个具体的人${skin.noReplies ? '（此载体没有跟帖，直接在内容里点名对方）' : '（用 to 属性指明回复的是哪一条楼层编号）'}。\n- 不要每条评论都去回复，也不要让他一次性刷好几条。他的发言不会改变主线剧情。`
-            : `\n\n【主角回避】\n故事的主角是「${protagonist}」。评论者里不得出现主角本人，也不要以他的身份或口吻发言；评论里需要提到他时，只能以第三方的口吻谈论他。`;
-    }
-
-    const likeAttr = (v) => (hotOn ? ` like="${v}"` : '');
-    const formatLines = skin.noReplies
-        ? [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" by="某某"${likeAttr(2315)}>……</c>`]
-        : [`<c n="1" by="某某"${likeAttr(128)}>……</c>`, `<c n="2" by="某某"${likeAttr(9)}>……</c>`, `<c n="3" to="2" by="某某"${likeAttr(2315)}>……</c>`, `<c n="4" to="3" by="某某"${likeAttr(41)}>……</c>`, `<c n="5" by="某某"${likeAttr(0)}>……</c>`];
-    const formatBlock = `【输出格式——必须严格遵守，程序靠这个格式识别楼层】
-每条评论用一对 <c> 标签包起来，格式固定为：
-主楼：<c n="楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>${skin.noReplies ? '' : `\n跟帖：<c n="楼层编号" to="被回复的楼层编号" by="网名"${hotOn ? ' like="赞数"' : ''}>评论内容</c>`}
-示例：
-${formatLines.join('\n')}
-- n 从1开始连续递增${skin.noReplies ? '' : '，主楼和跟帖共用同一个编号序列；跟帖的 to 填它回应的那一楼的编号（可以是主楼，也可以是另一条跟帖）'}。
-${hotOn ? '- 赞数是纯整数。分布要像真实论坛：少数楼层赞数很高（几百到几千），大多数只有个位数到几十，个别是0；赞数要和评论的质量、争议度、梗的好笑程度相符——吵得凶的、有洞察的、有梗的更高；跟帖的赞数一般比主楼低。\n' : ''}- 属性值一律用英文双引号，网名里不要出现双引号和 < > 符号；评论内容里不要出现 </c> 这样的标签文字。
-- 评论内容可以分段换行，但必须全部写在这一对 <c> 标签里面。
-- 除了这些标签，不要输出任何别的东西：不要开场白、不要分隔线、不要结尾说明、不要Markdown符号、不要加粗。`;
-
-    const angleText = angles.map((a, i) => `${i + 1}. ${a}`).join('\n');
-    const voiceText = voices.map(v => `- ${v}`).join('\n');
-
-    const planMin = PLAN_MIN_CHARS[settings.richness] || PLAN_MIN_CHARS.rich;
-    const planBlock = settings.planFirst !== false ? `
-
-【写作步骤——分两步】
-第一步：先输出 <构思> 和 </构思> 两个标签之间的构思。这部分程序会自动删掉、读者看不到，所以请写得充分、具体，不要偷懒：构思部分不少于 ${planMin} 字，绝对不能只写一两句话。请按下面的小标题逐项填写（构思里可以不遵守输出格式）：
-<构思>
-【可讨论的细节】至少8条，每条写明是剧情里哪一句话/哪个动作/哪件物品，以及它能引出什么讨论。
-【评论者名单】${personaMin}～${personaMax} 位，每位一行：网名｜身份｜立场｜说话习惯｜最在意的点。要彼此差异明显，包括立场对立的人。
-【争论线与互动】至少3条会吵起来的争论线，几个跑题/玩梗/脑补点，以及${skin.noReplies ? '谁会接谁的梗' : '楼中楼里谁会接谁的话'}。
-${useLengthTable ? '【逐楼提纲】按上面的字数分配表，为每一条主楼各写一行：第几条｜网名｜针对剧情里哪个具体细节｜立场｜准备说的 2～3 个要点（长评要写出论证的层次，说清先说什么、再说什么、最后落在哪）。\n' : ''}【焦点核对】逐条核对上面"本次讨论焦点"是否都安排进去了，没有就补上。
-</构思>
-第二步：构思结束后，紧接着输出论坛正文，严格使用上面的输出格式。` : '';
-
-    // 记下这次随机抽到了什么，诊断报告里要用
-    lastPromptMeta = {
-        mode: settings.forumMode === 'forum' ? 'forum' : 'thread',
-        richness: settings.richness, storyChars: story.length, planMin, personaMin, personaMax,
-        angles: angles.slice(), voices: voices.slice(),
-        floorCount, replyCount, lengthTable: useLengthTable ? lengthTable : '',
-    };
-
-    if (settings.forumMode === 'forum') {
-        // 多帖论坛模式：用另一套提示词（公共的素材在上面已经算好）
-        return buildForumPromptText({
-            settings, direction, identityText, protagonist, worldInfoBlock,
-            angleText, voiceText, planMin, personaMin, personaMax, story,
-        });
-    }
-
-    // 格式提醒和"开始写"的提示放在整段提示词的最末尾（模型最容易照做的位置）
-    const formatReminder = `（格式提醒：论坛正文必须全部用 <c n=… by=…>…</c> 标签写，不要改成别的写法，不要写到中途换成“网名：内容”这样的格式。）`;
-    const tail = settings.planFirst !== false
-        ? `${planBlock}\n\n${formatReminder}\n\n现在开始。先完成第一步（构思），写完构思再接着写论坛正文：\n<构思>`
-        : `${formatReminder}\n\n【观察者评论】`;
-
-    return `你是"观察者论坛"。
-
-【时间背景】
-${DIRECTION_TEXT[direction]}
-
-【评论者身份】
-${identityText}
-${skin.promptText ? '\n' + skin.promptText + '\n' : ''}
-请把下面的剧情片段视为已经/正在/即将发生（具体哪种，参照上面的时间背景判断）的事，生成一段与当前主线完全分离的"观察者论坛"评论区。
-
-【严格规则】
-1. 这不是主线续写，不得继续当前剧情。
-2. 这些评论不会被当前任何角色看到，不得改变当前世界状态。
-3. 不得把评论中的推测当成事实，也不得凭空补充关键剧情。
-4. 可以出现误解、争论、玩梗、不同立场；评论者可以理解错，但不要让所有人都同一种看法。
-5. 评论重点放在这段剧情中真正发生的事件、人物行为和结果。
-6. 除非身份设定本来就限定为同一类人（比如"当事人论坛"），否则评论者之间身份要有明显差异。
-7. 不要出现"作为AI""提示词""主线"等元话语。
-8. 最后不要总结，不要解释生成过程。
-
-【数量与长度】
-- 生成 ${floorCount} 条主楼评论${skin.noReplies ? '' : `；另外再写 ${replyCount} 条左右的楼中楼跟帖（跟帖不算在主楼数量里）`}。
-${useLengthTable
-    ? `- 下面是程序随机分配的字数分配表，请严格按表写每一条主楼：标"长评"的必须真的写到约定字数（有具体论证、细节、前因后果，不能用一两句话敷衍），只有标"短评"的才可以一两句话。主楼的发布顺序就按表里的顺序。
-${lengthTable}
-- 跟帖以一两句话为主（20～80字），其中 1～2 条可以展开写（100～200字）。`
-    : `- 字数安排：${skin.lengthText}。`}
-
-【质量要求——避免千篇一律】
-- 每条评论至少抓住剧情里的一个具体细节（人名、物品、台词、动作、数字、地点），不要空泛地评价。
-- 不要每条都走"先复述剧情→再表态→再总结升华"的三段式；不要用"这或许就是……""这正是……的意义"这类金句或升华来收尾；少用排比、对仗这类整齐的句子。
-- 每位评论者要有自己的说话习惯、关心的点和立场，不要所有人用同样的句式和语气。
-${skin.noReplies ? '- 评论者之间要有呼应：有人接梗、有人跟风复读、有人被带偏。' : '- 评论者之间要有互动：有人点名反驳、有人接梗、有人被带偏。热门楼层可以有 2～4 条跟帖，还可以出现跟帖回复跟帖；冷门楼层可以没人理。'}
-- 同一个开头词或口头禅，整个论坛里最多出现两次。
-- 像真人打字：允许跑题、半截话、反问、省略号，但不要刻意卖弄。${protagonistBlock}
-
-【本次讨论焦点——由程序随机指定，务必每一条都有人谈到】
-${angleText}
-
-【本次语言风格参考——挑几种分配给不同评论者，按身份适配，不必全用】
-${voiceText}
-
-${formatBlock}
-${worldInfoBlock}
-【剧情片段】
-${story}
-
-${tail}`;
-}
-
 // ==================== 诊断报告 ====================
 // 每次生成都会自动记录一份诊断报告：用了什么设置、提示词里随机抽到了什么、请求各阶段花了多久、
 // 模型有没有输出"思考"字段、怎么结束的、构思写了多少、正文写了多少、实际字数和分配表差多少……
 // 表现好和表现差的时候各复制一份发出来对比，就能看出区别在哪。
 // 报告里不含API密钥；默认不含提示词全文和剧情原文（在设置里可以选择包含）。
-const PLUGIN_VERSION = '0.19.0';
+const PLUGIN_VERSION = '0.20.0';
 const DIAG_STORE_KEY = 'future_observer_diag_reports';
 const DIAG_MAX_REPORTS = 6;
 let lastPromptMeta = null; // buildPrompt 每次会把"这次随机抽到了什么"记在这里
@@ -1007,6 +1333,7 @@ function buildDiagnosticReport(info) {
     push('');
 
     push('【提示词里这次随机抽到的内容】');
+    push(`视角：${s.timeDirection}:${s.identity}    讨论话题：${m.topic || '(无)'}    当事人限定：${m.selves ? '是' : '否'}    同人加强：${s.fandomBoost ? `开（资料 ${m.fandomRefChars ?? 0} 字，${m.fandomRefSource || m.fandomRefNote || '无来源'}）` : '关'}`);
     push(`剧情原文字数：${m.storyChars ?? '?'}    构思最少字数要求：${m.planMin ?? '?'}    评论者人数要求：${m.personaMin ?? '?'}～${m.personaMax ?? '?'}`);
     if (m.angles) push(`讨论焦点：\n${m.angles.map((a, i) => `  ${i + 1}. ${a}`).join('\n')}`);
     if (m.voices) push(`语言风格：${m.voices.join('；')}`);
@@ -1042,9 +1369,7 @@ function buildDiagnosticReport(info) {
     if (s.planFirst !== false) {
         const need = m.planMin;
         push(`构思字数：${planLen === null ? '没有找到完整的构思' : planLen}（要求不少于 ${need ?? '?'}${planLen !== null && need ? `，达到 ${Math.round(planLen / need * 100)}%` : ''}）`);
-        const headings = m.mode === 'forum'
-            ? ['【可讨论的细节】', '【帖子策划】', '【评论者名单】', '【互动线】', '【焦点核对】']
-            : (m.lengthTable ? ['【可讨论的细节】', '【评论者名单】', '【争论线与互动】', '【逐楼提纲】', '【焦点核对】'] : ['【可讨论的细节】', '【评论者名单】', '【争论线与互动】', '【焦点核对】']);
+        const headings = m.planHeadings?.length ? m.planHeadings : ['【可讨论的细节】', '【焦点核对】'];
         push(`构思小标题：${headings.map(h => `${h.replace(/[【】]/g, '')}${planText.includes(h) ? '✓' : '✗'}`).join('  ')}`);
         const outlineHeading = m.mode === 'forum' ? '【帖子策划】' : '【逐楼提纲】';
         const outline = sectionLines(planText, outlineHeading);
@@ -1052,6 +1377,8 @@ function buildDiagnosticReport(info) {
         if (outlineNeed != null) push(`${outlineHeading.replace(/[【】]/g, '')}行数：${outline ? outline.length : '没有这一节'}（应有 ${outlineNeed}）`);
         const personas = sectionLines(planText, '【评论者名单】');
         if (personas) push(`评论者名单行数：${personas.length}（要求 ${m.personaMin}～${m.personaMax}）`);
+        const roster = sectionLines(planText, '【出场角色名册】');
+        if (roster) push(`出场角色名册行数：${roster.length}（当事人视角：发言者只能是剧情里出场的人）`);
     }
 
     // 去掉所有标签包着的内容后还剩多少游离文字
@@ -1432,39 +1759,6 @@ function escapeHtml(str) {
         .replace(/>/g, '&gt;');
 }
 
-// 从同人模式的一行评论里，拆出"网名（真名）：内容"这几块，用于"采纳"功能。
-// 解析不出来就返回 null（比如AI这次没按格式写），调用方要自己处理这种情况。
-function parseFandomLine(rawLine) {
-    let text = String(rawLine || '').trim();
-    // 去掉开头的楼层编号，例如 "12楼 - " 或 "12楼 - 回复3楼 "
-    text = text.replace(/^\d+\s*楼\s*[-—－]?\s*/, '');
-    text = text.replace(/回复\s*\d+\s*楼\s*/, '');
-
-    const match = text.match(/^(.*?)[（(]([^（）()]+)[）)]\s*[:：]\s*([\s\S]*)$/);
-    if (!match) return null;
-
-    const realName = match[2].trim();
-    const content = match[3].trim();
-    if (!realName || !content) return null;
-    return { realName, content };
-}
-
-// 把一条同人评论"采纳"进酒馆自己的正文输入框，格式化成 /sendas 指令，
-// 交给你自己看一眼、编辑、决定要不要发送——插件不会自己往聊天记录里硬插东西。
-function adoptToInput(realName, content) {
-    const textarea = document.getElementById('send_textarea');
-    if (!textarea) {
-        toastr.warning('没找到酒馆的输入框，请手动复制这条内容。', '观察者论坛');
-        return;
-    }
-    const safeName = String(realName).replace(/"/g, '\\"');
-    const command = `/sendas name="${safeName}" ${content}`;
-    textarea.value = command;
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.focus();
-    toastr.success('已填入输入框，确认没问题再自己点发送。', '观察者论坛');
-}
-
 // ==================== 解析与渲染 ====================
 // 提示词要求AI按固定格式输出：
 //   主贴|网名|内容                          （旧版微博体留下的历史记录里可能有）
@@ -1667,7 +1961,7 @@ function parseForumSmart(text) {
 }
 
 // 可选主题（名字对应样式表里的 .future-observer-th-名字）
-const THEME_NAMES = ['night', 'paper', 'sakura', 'starry', 'neon', 'ink'];
+const THEME_NAMES = ['aurora', 'terminal', 'blueprint', 'pop', 'steam', 'ink'];
 
 // 取消生成时，把最后一个没写完的标签（以及它后面的内容）整段丢掉，只保留到最后一个结束标签为止
 function trimToLastCloseTag(text) {
@@ -1714,6 +2008,14 @@ function buildThread(records) {
     const byNum = new Map();
     let lastRoot = null;
     for (const rec of records) {
+        // 有的模型不会用 to 属性，而是把"to 1楼："这样的字样直接写进评论开头：认出来，转成真正的回复关系，并把这几个字从内容里去掉
+        if (rec.replyTo == null) {
+            const pm = String(rec.content).match(/^\s*(?:to|TO|To|回复|回覆|@|＠)\s*[#＃]?(\d{1,3})\s*(?:楼|层)?\s*(?:[:：,，、]|\s)\s*(?=\S)/);
+            if (pm && byNum.has(Number(pm[1]))) {
+                rec.replyTo = Number(pm[1]);
+                rec.content = String(rec.content).slice(pm[0].length);
+            }
+        }
         const item = {
             kind: rec.replyTo != null ? 'reply' : 'floor',
             num: rec.num,
@@ -1902,15 +2204,9 @@ function postHotScore(p) {
     return (Number.isFinite(p.likes) ? p.likes : 0) + p.count * 8;
 }
 
-// 渲染用的一组小工具：它们共用同一份"采纳按钮"登记表
-function makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn) {
-    let idx = 0;
+// 渲染用的一组小工具
+function makeRenderHelpers(settings, protagonist, protagonistOn) {
     const H = {};
-    H.pushAdopt = (item) => {
-        const m = String(item.name).match(/[（(]([^（）()]+)[）)]\s*$/);
-        adoptSource[idx] = m && item.content ? { realName: m[1].trim(), content: item.content } : null;
-        return idx++;
-    };
     H.likesHtml = (item) => (Number.isFinite(item.likes)
         ? `<span class="future-observer-likes">👍 ${escapeHtml(formatLikes(item.likes))}</span>` : '');
     H.isMe = (item) => protagonistOn && isProtagonistName(item.name, protagonist);
@@ -1920,24 +2216,20 @@ function makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn) {
     // 树形：主楼 + 挂在下面的跟帖（论坛楼层 / 新闻评论区 / 帖子详情页共用）
     H.treeHtml = (thread, hotEnabled) => {
         const renderRoot = (root, hot) => {
-            const i = H.pushAdopt(root);
             let h = `<div class="future-observer-floor${hot ? ' is-hot' : ''}${H.meClass(root)}">`
                 + '<div class="future-observer-floor-head">'
                 + (hot ? '<span class="future-observer-hot-badge">🔥</span>' : '')
                 + `<span class="future-observer-name">${escapeHtml(root.name)}</span>${H.meBadge(root)}`
                 + `${H.likesHtml(root)}<span class="future-observer-num">${escapeHtml(floorLabel(root))}</span></div>`
-                + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`
-                + `<span class="future-observer-actions" data-fo-i="${i}"></span>`;
+                + `<div class="future-observer-text">${escapeHtml(root.content)}</div>`;
             if (root.children.length) {
                 h += '<div class="future-observer-replies">';
                 for (const child of root.children) {
-                    const j = H.pushAdopt(child);
                     h += `<div class="future-observer-reply${H.meClass(child)}">`
                         + `<div class="future-observer-reply-head"><span class="future-observer-name">${escapeHtml(child.name)}</span>${H.meBadge(child)}`
                         + (child.replyToName ? `<span class="future-observer-reply-to">回复 ${escapeHtml(child.replyToName)}</span>` : '')
                         + `${H.likesHtml(child)}<span class="future-observer-num">${escapeHtml(floorLabel(child))}</span></div>`
-                        + `<div class="future-observer-text">${escapeHtml(child.content)}</div>`
-                        + `<span class="future-observer-actions" data-fo-i="${j}"></span></div>`;
+                        + `<div class="future-observer-text">${escapeHtml(child.content)}</div></div>`;
                 }
                 h += '</div>';
             }
@@ -1961,14 +2253,12 @@ function makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn) {
     H.chatHtml = (thread) => {
         let html = '';
         for (const item of thread.flat) {
-            const i = H.pushAdopt(item);
             html += `<div class="future-observer-msg${H.meClass(item)}">`
                 + `<div class="future-observer-msg-name">${escapeHtml(item.name)}${H.meBadge(item)}</div>`
                 + '<div class="future-observer-bubble">'
                 + (item.kind === 'reply' && item.target
                     ? `<div class="future-observer-quote">↩ ${escapeHtml(item.target.name)}：${escapeHtml(snippet(item.target.content, 24))}</div>` : '')
-                + `<div class="future-observer-text">${escapeHtml(item.content)}</div></div>`
-                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+                + `<div class="future-observer-text">${escapeHtml(item.content)}</div></div></div>`;
         }
         return html;
     };
@@ -1976,11 +2266,9 @@ function makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn) {
     H.danmakuHtml = (thread) => {
         let html = '';
         for (const item of thread.flat) {
-            const i = H.pushAdopt(item);
             html += `<div class="future-observer-danmaku-item${H.meClass(item)}">`
                 + `<span class="future-observer-danmaku-text">${escapeHtml(item.content)}</span>`
-                + `<span class="future-observer-danmaku-name">${escapeHtml(item.name)}</span>`
-                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
+                + `<span class="future-observer-danmaku-name">${escapeHtml(item.name)}</span></div>`;
         }
         return html;
     };
@@ -2045,14 +2333,14 @@ function renderForumHtml(parsed, H, postIdx, settings, streaming) {
     return h + '</div>';
 }
 
-// 把生成结果渲染出来。showAdopt: 是否在每条后面加"采纳"按钮（只在同人模式下有意义）
+// 把生成结果渲染出来。
 // opts.streaming: 流式输出中，内容还没写完——不做热评重排，末尾加"正在写"提示
-function renderResultInto($el, rawText, showAdopt, opts = {}) {
+function renderResultInto($el, rawText, opts = {}) {
     const settings = getSettings();
     const streaming = !!opts.streaming;
     const raw = String(rawText ?? '');
     // 记下来，点开帖子/返回列表时要用同一份内容重新渲染
-    $el.data('foRaw', raw).data('foShowAdopt', !!showAdopt);
+    $el.data('foRaw', raw);
 
     // 开了"先构思"，且还没看到构思结束标签、也还没开始出现正文：说明还在构思阶段
     const planMode = settings.planFirst !== false;
@@ -2088,8 +2376,18 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
         return;
     }
 
-    const adoptSource = [];
-    const H = makeRenderHelpers(settings, adoptSource, protagonist, protagonistOn);
+    // 当事人视角：隐藏不在"出场角色名册"里的发言者（名册解析不出来、或会误删太多时不过滤）
+    let castDropped = 0;
+    if (!streaming) {
+        const roster = getRosterFromText(raw);
+        if (roster.length) {
+            const res = applyCastFilter(parsed, roster);
+            parsed = res.parsed;
+            castDropped = res.dropped;
+        }
+    }
+
+    const H = makeRenderHelpers(settings, protagonist, protagonistOn);
     let html;
 
     if (parsed.mode === 'forum') {
@@ -2097,18 +2395,15 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
         html = renderForumHtml(parsed, H, Number.isInteger(postIdx) ? postIdx : null, settings, streaming);
     } else if (parsed.count === 0 && !parsed.mainPost && !streaming && planMode && !/<\/构思>/.test(raw)) {
         // 开了先构思，却没有任何楼层、也没有构思结束标签：多半是输出在构思阶段被截断了
-        $el.text('没有识别到论坛格式的内容。可能是输出在“构思”阶段就被截断了（请调大“最大输出长度”），也可能是AI没按格式输出（点下方“查看AI原始输出”看看它写了什么）。');
+        $el.text('没有识别到论坛格式的内容。可能是输出在“构思”阶段就被截断了（请调大“最大输出长度”），也可能是AI没按格式输出（在设置里打开“开发者模式”可以看到它写了什么）。');
         return;
     } else if (parsed.count === 0 && !parsed.mainPost) {
         // 完全认不出格式：退回逐行显示（过滤掉空行和纯符号行）
         html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
         const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => /[\p{L}\p{N}]/u.test(l));
-        lines.forEach((line, i) => {
-            const fan = parseFandomLine(line);
-            adoptSource[i] = fan ? { realName: fan.realName, content: fan.content } : null;
-            html += `<div class="future-observer-floor"><div class="future-observer-text">${escapeHtml(line)}</div>`
-                + `<span class="future-observer-actions" data-fo-i="${i}"></span></div>`;
-        });
+        for (const line of lines) {
+            html += `<div class="future-observer-floor"><div class="future-observer-text">${escapeHtml(line)}</div></div>`;
+        }
         html += '</div>';
     } else {
         html = `<div class="future-observer-feed future-observer-skin-${skin}">`;
@@ -2126,26 +2421,18 @@ function renderResultInto($el, rawText, showAdopt, opts = {}) {
         html += '</div>';
     }
 
-    $el.html(html);
-
-    if (showAdopt) {
-        adoptSource.forEach((src, i) => {
-            if (!src) return;
-            const $btn = $('<button type="button" class="future-observer-adopt-btn" title="转成 /sendas 指令填进输入框（不会自动发送）">📥 采纳</button>');
-            $btn.data('fo-name', src.realName).data('fo-content', src.content);
-            $el.find(`.future-observer-actions[data-fo-i="${i}"]`).append($btn);
-        });
+    if (castDropped > 0) {
+        html += `<div class="future-observer-filternote">已隐藏 ${castDropped} 条不在“出场角色名册”里的发言</div>`;
     }
+    $el.html(html);
 }
 
 // 点开帖子/返回列表时，用同一份内容重新渲染（多帖论坛模式）
 function rerenderResultBox($box) {
     const raw = $box.data('foRaw');
     if (raw === undefined) return;
-    renderResultInto($box, raw, !!$box.data('foShowAdopt'));
-    const full = $box.data('foRawFull');
-    const diag = $box.data('foDiag');
-    if (full || diag) appendRawViewer($box, full, diag);
+    renderResultInto($box, raw);
+    appendResultExtras($box);
     const el = $box.get(0);
     if (el && $box.hasClass('future-observer-popup-result')) el.scrollTop = 0;
 }
@@ -2175,12 +2462,10 @@ function showHistoryAt(scopeKey, idx) {
     if (idx < 0 || idx >= list.length) return;
     historyCursor[scopeKey] = idx;
     const entry = list[idx];
-    const settings = getSettings();
-    const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
     $('.future-observer-result').each(function () {
         const $box = $(this);
-        $box.removeData('foPost').removeData('foRawFull');
-        renderResultInto($box, entry.text, showAdopt);
+        $box.removeData('foPost').removeData('foRawFull').removeData('foInfo').removeData('foDiag');
+        renderResultInto($box, entry.text);
     });
     refreshHistoryNav();
 }
@@ -2225,6 +2510,94 @@ function appendRawViewer($el, raw, diagText) {
     $el.append($wrap);
 }
 
+// ==================== 结果信息栏（取代原来的"原始输出""诊断报告"） ====================
+// 每次生成完，结果区底部只留一行基础情报：模型、token、耗时、速度、构思字数、结束原因。
+// 疑似被分到"快速通道"（速度异常快、构思明显偏短）时，会多一条提示和"重新生成"按钮。
+// 完整的诊断报告和AI原始输出，需要在设置里打开"开发者模式"才会显示。
+
+function detectFastChannel(info) {
+    const reasons = [];
+    if (info.status !== '完成') return reasons;
+    const s = info.settings || {};
+    const x = info.metrics;
+    const sec = (info.totalMs ?? x?.tEnd ?? 0) / 1000;
+    const out = x?.usage?.completion_tokens;
+    const th = Number(s.fastTokPerSec);
+    if (th > 0 && out && sec > 5 && out / sec > th) {
+        reasons.push(`输出速度约 ${Math.round(out / sec)} token/秒，高于你设的 ${th}`);
+    }
+    if (s.planFirst !== false && info.meta?.planMin) {
+        const pl = measurePlanLength(info.raw);
+        if (pl === null) reasons.push('没有找到完整的构思');
+        else if (pl < info.meta.planMin * 0.85) reasons.push(`构思只有 ${pl} 字，不到要求的 ${info.meta.planMin} 字的 85%`);
+    }
+    return reasons;
+}
+
+function buildInfoSummary(info) {
+    const s = info.settings || {};
+    const x = info.metrics;
+    const m = info.meta || {};
+    const model = x?.model || (info.useCustomApi ? s.customApi?.model : info.stInfo?.model) || '未知模型';
+    const usage = x?.usage;
+    const sec = (info.totalMs ?? x?.tEnd ?? 0) / 1000;
+    const raw = String(info.raw ?? '');
+    const parts = [];
+    if (info.status !== '完成') parts.push(`状态：${info.status}`);
+    if (info.error) parts.push(String(info.error).slice(0, 80));
+    parts.push(`模型 ${model}`);
+    if (usage?.prompt_tokens && usage?.completion_tokens) {
+        parts.push(`输入 ${usage.prompt_tokens} / 输出 ${usage.completion_tokens} token`);
+    } else {
+        parts.push(`输入约 ${info.promptChars ?? '?'} 字 / 输出约 ${raw.length} 字`);
+    }
+    if (sec > 0) parts.push(`耗时 ${sec.toFixed(1)} 秒`);
+    if (sec > 1) {
+        if (usage?.completion_tokens) parts.push(`${Math.round(usage.completion_tokens / sec)} token/秒`);
+        else if (raw.length) parts.push(`${Math.round(raw.length / sec)} 字/秒`);
+    }
+    if (s.planFirst !== false) {
+        const pl = measurePlanLength(raw);
+        if (pl !== null) parts.push(`构思 ${pl} 字`);
+    }
+    if (x?.finishReason) parts.push(`结束：${x.finishReason}`);
+    if (m.fandomRefChars) parts.push(`📚 资料 ${m.fandomRefChars} 字`);
+    else if (s.fandomBoost && m.fandom) parts.push(`📚 ${m.fandomRefNote || '没有资料'}`);
+
+    const buffered = !!(x && x.chunks > 0 && x.tEnd != null && x.tFirstChunk != null && (x.tEnd - x.tFirstChunk) < 800 && x.contentChars > 800);
+    const reasons = detectFastChannel(info);
+    const text = parts.join(' · ');
+    const title = buffered
+        ? '中转站把整段内容写完才一起发过来，所以只能看到总耗时，分不出思考和输出各花了多久。'
+        : (x?.tPlanEnd ? `构思阶段花了 ${(x.tPlanEnd / 1000).toFixed(1)} 秒。` : '');
+    return { text, title, reasons, copyText: text + (reasons.length ? `\n疑似快速通道：${reasons.join('；')}` : '') };
+}
+
+function appendInfoBar($el, infoObj) {
+    if (!infoObj) return;
+    const $bar = $('<div class="future-observer-infobar"></div>');
+    $bar.data('copy', infoObj.copyText);
+    $bar.append($('<div class="future-observer-infoline"></div>').text(infoObj.text).attr('title', infoObj.title || ''));
+    if (infoObj.reasons && infoObj.reasons.length) {
+        const $w = $('<div class="future-observer-fastwarn"></div>');
+        $w.append($('<span></span>').text(`⚡ 这次疑似被分到“快速通道”，内容可能偏薄：${infoObj.reasons.join('；')}`));
+        $w.append($('<button type="button" class="future-observer-regen"></button>').text('🔁 重新生成'));
+        $bar.append($w);
+    }
+    $bar.append($('<div class="future-observer-infoactions"></div>').append($('<span class="future-observer-infocopy"></span>').text('📋 复制这行')));
+    $el.append($bar);
+}
+
+// 结果区底部的附加内容：信息栏；开发者模式下再加原始输出和完整诊断报告
+function appendResultExtras($box) {
+    appendInfoBar($box, $box.data('foInfo'));
+    if (getSettings().devMode) {
+        const full = $box.data('foRawFull');
+        const diag = $box.data('foDiag');
+        if (full || diag) appendRawViewer($box, full, diag);
+    }
+}
+
 // 当前正在进行的一次生成（同一时间只允许一次）；取消按钮靠它找到要中断的东西
 let currentRun = null;
 const CANCELLED = Symbol('cancelled');
@@ -2255,12 +2628,22 @@ function scheduleStreamRender(run) {
         $('.future-observer-result').each(function () {
             const box = this;
             const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-            renderResultInto($(box), run.partial, false, { streaming: true });
+            renderResultInto($(box), run.partial, { streaming: true });
             if (nearBottom && $(box).hasClass('future-observer-popup-result')) {
                 box.scrollTop = box.scrollHeight;
             }
         });
     }, 150);
+}
+
+// 走酒馆主连接的"原始生成"：只发我们自己的提示词，不带预设和聊天历史
+async function callMainRaw(ctx, prompt, maxTokens) {
+    const gr = ctx.generateRaw;
+    // 新版酒馆用对象传参（函数的 length 为 0），旧版按顺序传参
+    if (gr.length === 0) {
+        return await gr({ prompt, responseLength: maxTokens > 0 ? maxTokens : undefined, trimNames: false });
+    }
+    return await gr(prompt, null, false, false, '', maxTokens > 0 ? maxTokens : undefined);
 }
 
 async function generateObservation() {
@@ -2274,6 +2657,7 @@ async function generateObservation() {
     }
 
     const settings = getSettings();
+    rememberTopic(settings.topic);
     const run = {
         cancelled: false,
         abort: new AbortController(),
@@ -2287,34 +2671,48 @@ async function generateObservation() {
     currentRun = run;
     const startedAt = Date.now();
 
-    // 诊断报告要用到的材料：边生成边收集
+    // 信息栏和诊断报告要用到的材料：边生成边收集
     let promptText = '';
     let promptMeta = null;
     const settingsSnapshot = JSON.parse(JSON.stringify({
         ...settings,
         customApi: { ...(settings.customApi || {}), apiKey: undefined, modelList: undefined },
         fandomWorkHistory: undefined,
+        fandomLibrary: undefined,
+        topicHistory: undefined,
     }));
-    const emitDiagnostic = (status, rawText, errorMsg) => {
-        try {
-            const x = run.metrics;
-            if (x && x.tEnd == null) x.tEnd = performance.now() - x.t0;
-            const info = {
-                status, error: errorMsg || '', raw: rawText || '', startedAt,
-                settings: settingsSnapshot, meta: promptMeta, metrics: x,
-                useCustomApi: run.useCustomApi, promptChars: promptText.length,
-                totalMs: performance.now() - run.t0,
-                stInfo: run.useCustomApi ? null : getStInfo(),
-                includePrompt: !!settings.diagFullPrompt,
-                promptText,
-            };
-            const text = buildDiagnosticReport(info);
-            addDiagReport(text, `${status} · ${diagSummaryLine(info)}`);
-            return text;
-        } catch (e) {
-            console.warn('[观察者论坛] 生成诊断报告失败：', e);
-            return '';
+    // 生成一份信息栏内容；开发者模式下再生成完整诊断报告
+    const finalize = (status, rawText, errorMsg) => {
+        const x = run.metrics;
+        if (x && x.tEnd == null) x.tEnd = performance.now() - x.t0;
+        const info = {
+            status, error: errorMsg || '', raw: rawText || '', startedAt,
+            settings: settingsSnapshot, meta: promptMeta, metrics: x,
+            useCustomApi: run.useCustomApi, promptChars: promptText.length,
+            totalMs: performance.now() - run.t0,
+            stInfo: run.useCustomApi ? null : getStInfo(),
+            includePrompt: !!settings.diagFullPrompt,
+            promptText,
+        };
+        let infoObj = null;
+        let report = '';
+        try { infoObj = buildInfoSummary(info); } catch (e) { console.warn('[观察者论坛] 生成信息栏失败：', e); }
+        if (settings.devMode) {
+            try {
+                report = buildDiagnosticReport(info);
+                addDiagReport(report, `${status} · ${diagSummaryLine(info)}`);
+            } catch (e) {
+                console.warn('[观察者论坛] 生成诊断报告失败：', e);
+            }
         }
+        return { infoObj, report };
+    };
+    const showExtras = (rawText, infoObj, report) => {
+        resultBoxes.each(function () {
+            const $box = $(this);
+            $box.data('foInfo', infoObj).data('foRawFull', rawText).data('foDiag', report);
+            appendResultExtras($box);
+        });
     };
 
     setOptionsOpen(false); // 一点生成就把选项折叠起来，把空间让给评论区
@@ -2322,7 +2720,6 @@ async function generateObservation() {
     resultBoxes.text('🔭 正在观察……');
 
     try {
-        const showAdopt = settings.timeDirection === 'otherworld' && settings.identity === 'fandom';
         const maxTokens = Number(settings.maxOutputTokens) || 0;
         const planExpected = settings.planFirst !== false;
         let result = '';
@@ -2348,16 +2745,22 @@ async function generateObservation() {
                 });
             } else {
                 const ctx = getContext();
-                let generateQuietPrompt = ctx.generateQuietPrompt;
-                if (typeof generateQuietPrompt !== 'function') {
-                    ({ generateQuietPrompt } = await import('../../../../script.js'));
-                }
                 const cancelled = new Promise((resolve) => { run.resolveCancel = () => resolve(CANCELLED); });
-                const main = generateQuietPrompt({
-                    quietPrompt: prompt,
-                    quietToLoud: false,
-                    ...(maxTokens > 0 ? { responseLength: maxTokens } : {}),
-                });
+                let main;
+                if (settings.mainRaw && typeof ctx.generateRaw === 'function') {
+                    main = callMainRaw(ctx, prompt, maxTokens);
+                } else {
+                    if (settings.mainRaw) toastr.warning('当前酒馆版本没有“原始生成”接口，已改用普通方式。', '观察者论坛');
+                    let generateQuietPrompt = ctx.generateQuietPrompt;
+                    if (typeof generateQuietPrompt !== 'function') {
+                        ({ generateQuietPrompt } = await import('../../../../script.js'));
+                    }
+                    main = generateQuietPrompt({
+                        quietPrompt: prompt,
+                        quietToLoud: false,
+                        ...(maxTokens > 0 ? { responseLength: maxTokens } : {}),
+                    });
+                }
                 main.catch(() => { /* 取消后酒馆那边可能还会报错，这里不管 */ });
                 result = await Promise.race([main, cancelled]);
                 if (result === CANCELLED) result = '';
@@ -2379,8 +2782,8 @@ async function generateObservation() {
         }
 
         if (failed) {
-            const report = emitDiagnostic('失败', run.partial, failMsg);
-            resultBoxes.each(function () { appendRawViewer($(this), run.partial, report); });
+            const { infoObj, report } = finalize('失败', run.partial, failMsg);
+            showExtras(run.partial, infoObj, report);
             return;
         }
 
@@ -2388,7 +2791,7 @@ async function generateObservation() {
         run.finished = true;
         if (run.renderTimer) { clearTimeout(run.renderTimer); run.renderTimer = null; }
 
-        const rawOriginal = result || run.partial || ''; // 原始输出（含构思），供"查看原始输出"和诊断报告用
+        const rawOriginal = result || run.partial || ''; // 原始输出（含构思）
 
         if (run.cancelled) {
             // 取消：能保留多少保留多少（最后一行可能只写了一半，丢掉）
@@ -2398,22 +2801,22 @@ async function generateObservation() {
             const parsedPartial = parseForumAny(partial, false);
             if (!parsedPartial.count && !parsedPartial.mainPost) {
                 resultBoxes.text('已取消。');
-                const report = emitDiagnostic('已取消（没有可保留的内容）', rawOriginal);
-                resultBoxes.each(function () { appendRawViewer($(this), rawOriginal, report); });
+                const { infoObj, report } = finalize('已取消（没有可保留的内容）', rawOriginal);
+                showExtras(rawOriginal, infoObj, report);
                 return;
             }
             result = partial;
             toastr.info('已停止，保留了已经写好的部分。', '观察者论坛');
         }
 
-        const report = emitDiagnostic(run.cancelled ? '已停止（保留了写好的部分）' : '完成', rawOriginal);
+        const { infoObj, report } = finalize(run.cancelled ? '已停止（保留了写好的部分）' : '完成', rawOriginal);
         const cleaned = cleanForumResult(result); // 去掉"构思"草稿，只留正文
         resultBoxes.each(function () {
             const $box = $(this);
-            $box.removeData('foPost').data('foRawFull', rawOriginal).data('foDiag', report); // 新一轮结果：回到帖子列表
-            renderResultInto($box, result, showAdopt);
-            appendRawViewer($box, rawOriginal, report);
+            $box.removeData('foPost'); // 新一轮结果：回到帖子列表
+            renderResultInto($box, result);
         });
+        showExtras(rawOriginal, infoObj, report);
         $('.future-observer-popup-result').scrollTop(0);
 
         if (!cleaned) {
@@ -2421,8 +2824,14 @@ async function generateObservation() {
             return;
         }
 
+        // 当事人视角：把"出场角色名册"带进历史记录，翻看旧记录时也能过滤名册外的发言
+        let toStore = cleaned;
+        if (!/<roster>/.test(cleaned) && settings.identity === 'selves' && settings.timeDirection !== 'otherworld') {
+            const roster = extractRosterFromPlan(extractPlanText(rawOriginal));
+            if (roster.length) toStore = `<roster>${roster.join('、')}</roster>\n${cleaned}`;
+        }
         const scopeKey = getMemoryScopeKey(settings);
-        await pushHistoryEntry(scopeKey, cleaned); // 每次生成都会存进历史记录
+        await pushHistoryEntry(scopeKey, toStore); // 每次生成都会存进历史记录
         historyCursor[scopeKey] = getHistoryList(scopeKey).length - 1; // 新生成的这条，游标指向最新
         refreshHistoryNav();
     } finally {
@@ -2432,14 +2841,53 @@ async function generateObservation() {
     }
 }
 
-function renderIdentityOptions($select, direction, currentValue) {
-    const options = IDENTITY_OPTIONS[direction] || IDENTITY_OPTIONS.future;
+// 把"视角"下拉框填好（分组：当事人 / 旁观者 / 异世界），并选中当前的视角
+function renderPerspectiveOptions($select, direction, identity) {
     $select.empty();
-    for (const opt of options) {
-        $select.append($('<option>', { value: opt.value, text: opt.label }));
+    for (const g of PERSPECTIVE_GROUPS) {
+        const $g = $('<optgroup>').attr('label', g.label);
+        for (const it of g.items) $g.append($('<option>', { value: it.value, text: it.label }));
+        $select.append($g);
     }
-    const validValues = options.map(o => o.value);
-    $select.val(validValues.includes(currentValue) ? currentValue : validValues[0]);
+    const cur = `${direction}:${identity}`;
+    const valid = PERSPECTIVE_GROUPS.some(g => g.items.some(it => it.value === cur));
+    $select.val(valid ? cur : 'future:onlookers');
+}
+
+const TOPIC_HISTORY_MAX = 8;
+
+function rememberTopic(topic) {
+    const t = String(topic || '').trim();
+    if (!t) return;
+    const settings = getSettings();
+    const history = Array.isArray(settings.topicHistory) ? settings.topicHistory : [];
+    settings.topicHistory = [t, ...history.filter(x => x !== t)].slice(0, TOPIC_HISTORY_MAX);
+    saveSettings();
+}
+
+function renderTopicHistoryList() {
+    const history = getSettings().topicHistory;
+    const $list = $('#future-observer-topic-history-list');
+    $list.empty();
+    if (!Array.isArray(history) || !history.length) {
+        $list.html('<div class="future-observer-fandom-history-empty">还没有用过话题</div>');
+        return;
+    }
+    for (const t of history) {
+        $list.append($('<div class="future-observer-fandom-history-item future-observer-topic-history-item"></div>').text(t));
+    }
+}
+
+// 刷新"同人资料"编辑区：显示当前作品的资料和来源
+function refreshFandomLibraryPanel(extraNote) {
+    const work = String(getSettings().fandomWork || '').trim();
+    const entry = work ? getFandomLibrary()[work] : null;
+    $('#future-observer-fandom-lib-text').val(entry?.text || '');
+    let status;
+    if (!work) status = '先在上面填作品名。';
+    else if (entry?.text) status = `${entry.manual ? '手动资料' : '联网缓存'} · ${entry.source || ''} · ${entry.text.length} 字`;
+    else status = '资料库里还没有这部作品的资料。生成时会自动联网查，也可以点“联网查询”，或自己写在下面。';
+    $('#future-observer-fandom-lib-status').text(extraNote ? `${status}（${extraNote}）` : status);
 }
 
 const FANDOM_WORK_HISTORY_MAX = 8;
@@ -2487,14 +2935,20 @@ function syncControlsFromSettings() {
     $('#future-observer-maxchars').val(settings.maxChars);
     $('#future-observer-fab-toggle').prop('checked', settings.fabEnabled !== false);
     $('#future-observer-worldinfo-toggle').prop('checked', settings.worldInfoEnabled !== false);
-    $('.future-observer-theme-select').val(THEME_NAMES.includes(settings.theme) ? settings.theme : 'night');
+    $('.future-observer-theme-select').val(THEME_NAMES.includes(settings.theme) ? settings.theme : 'aurora');
     $('#future-observer-diag-fullprompt').prop('checked', !!settings.diagFullPrompt);
     refreshDiagUI();
 
-    $('.future-observer-direction-select').val(settings.timeDirection);
-    $('.future-observer-identity-select').each(function () {
-        renderIdentityOptions($(this), settings.timeDirection, settings.identity);
+    $('.future-observer-perspective-select').each(function () {
+        renderPerspectiveOptions($(this), settings.timeDirection, settings.identity);
     });
+    $('.future-observer-topic-input').val(settings.topic || '');
+    $('.future-observer-mainraw-toggle').prop('checked', !!settings.mainRaw);
+    $('.future-observer-devmode-toggle').prop('checked', !!settings.devMode);
+    $('.future-observer-diag-details').toggle(!!settings.devMode);
+    $('#future-observer-fasttok').val(Number(settings.fastTokPerSec) || 0);
+    $('.future-observer-fandom-boost-toggle').prop('checked', !!settings.fandomBoost);
+    $('#future-observer-fandom-boost-wrap').toggle(settings.timeDirection === 'otherworld' && settings.identity === 'fandom');
     $('.future-observer-richness-select').val(RICHNESS_SPECS[settings.richness] ? settings.richness : 'rich');
     $('.future-observer-plan-toggle').prop('checked', settings.planFirst !== false);
     const forumModeOn = settings.forumMode === 'forum';
@@ -2527,22 +2981,117 @@ function syncControlsFromSettings() {
 
 function bindSharedControls() {
     // 用事件委托 + 命名空间，避免重复绑定；class 选择器保证设置抽屉和悬浮球弹窗共用同一套逻辑
-    $(document).off('change.futureObserverDirection').on('change.futureObserverDirection', '.future-observer-direction-select', function () {
+    $(document).off('change.futureObserverPerspective').on('change.futureObserverPerspective', '.future-observer-perspective-select', function () {
         const settings = getSettings();
-        settings.timeDirection = String($(this).val());
-        const validIdentities = (IDENTITY_OPTIONS[settings.timeDirection] || IDENTITY_OPTIONS.future).map(o => o.value);
-        if (!validIdentities.includes(settings.identity)) {
-            settings.identity = validIdentities[0];
+        const [dir, ident] = String($(this).val()).split(':');
+        if (IDENTITY_OPTIONS[dir] && IDENTITY_OPTIONS[dir].some(o => o.value === ident)) {
+            settings.timeDirection = dir;
+            settings.identity = ident;
         }
         saveSettings();
         syncControlsFromSettings();
     });
 
-    $(document).off('change.futureObserverIdentity').on('change.futureObserverIdentity', '.future-observer-identity-select', function () {
+    $(document).off('input.futureObserverTopic change.futureObserverTopic').on('input.futureObserverTopic change.futureObserverTopic', '.future-observer-topic-input', function () {
         const settings = getSettings();
-        settings.identity = String($(this).val());
+        settings.topic = String($(this).val() || '').slice(0, 200);
+        saveSettings();
+        $('.future-observer-topic-input').not(this).val(settings.topic);
+        renderOptionChips();
+    });
+
+    $(document).off('click.futureObserverTopicArrow').on('click.futureObserverTopicArrow', '#future-observer-topic-history-arrow', function () {
+        const $list = $('#future-observer-topic-history-list');
+        if ($list.is(':visible')) { $list.hide(); return; }
+        renderTopicHistoryList();
+        $list.show();
+    });
+
+    $(document).off('click.futureObserverTopicItem').on('click.futureObserverTopicItem', '.future-observer-topic-history-item', function () {
+        const settings = getSettings();
+        settings.topic = $(this).text();
+        saveSettings();
+        $('.future-observer-topic-input').val(settings.topic);
+        $('#future-observer-topic-history-list').hide();
+        renderOptionChips();
+    });
+
+    $(document).off('change.futureObserverMainRaw').on('change.futureObserverMainRaw', '.future-observer-mainraw-toggle', function () {
+        const settings = getSettings();
+        settings.mainRaw = $(this).is(':checked');
         saveSettings();
         syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverDevMode').on('change.futureObserverDevMode', '.future-observer-devmode-toggle', function () {
+        const settings = getSettings();
+        settings.devMode = $(this).is(':checked');
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('change.futureObserverFastTok').on('change.futureObserverFastTok', '#future-observer-fasttok', function () {
+        const settings = getSettings();
+        settings.fastTokPerSec = Math.max(0, Math.min(2000, Math.floor(Number($(this).val()) || 0)));
+        $(this).val(settings.fastTokPerSec);
+        saveSettings();
+    });
+
+    $(document).off('click.futureObserverRegen').on('click.futureObserverRegen', '.future-observer-regen', function () {
+        if (!currentRun) generateObservation();
+    });
+
+    $(document).off('click.futureObserverInfoCopy').on('click.futureObserverInfoCopy', '.future-observer-infocopy', async function () {
+        const text = String($(this).closest('.future-observer-infobar').data('copy') || '');
+        const ok = text && await copyText(text);
+        if (ok) toastr.success('已复制。', '观察者论坛');
+        else toastr.warning('无法自动复制，请手动选中上面那行文字复制。', '观察者论坛');
+    });
+
+    // —— 同人加强：开关 + 资料库编辑 ——
+    $(document).off('change.futureObserverFandomBoost').on('change.futureObserverFandomBoost', '.future-observer-fandom-boost-toggle', function () {
+        const settings = getSettings();
+        settings.fandomBoost = $(this).is(':checked');
+        saveSettings();
+        syncControlsFromSettings();
+    });
+
+    $(document).off('click.futureObserverLibToggle').on('click.futureObserverLibToggle', '#future-observer-fandom-lib-toggle', function () {
+        const $panel = $('#future-observer-fandom-lib-panel');
+        if ($panel.is(':visible')) { $panel.hide(); return; }
+        refreshFandomLibraryPanel();
+        $panel.show();
+    });
+
+    $(document).off('click.futureObserverLibSave').on('click.futureObserverLibSave', '#future-observer-fandom-lib-save', function () {
+        const work = String(getSettings().fandomWork || '').trim();
+        if (!work) { toastr.warning('先填上面的作品名。', '观察者论坛'); return; }
+        const text = String($('#future-observer-fandom-lib-text').val() || '').trim();
+        const lib = getFandomLibrary();
+        if (text) lib[work] = { text, source: '你手动写的资料库', time: Date.now(), manual: true };
+        else delete lib[work];
+        saveSettings();
+        refreshFandomLibraryPanel();
+        toastr.success(text ? '已保存，之后生成会优先用这份资料。' : '资料已清空。', '观察者论坛');
+    });
+
+    $(document).off('click.futureObserverLibFetch').on('click.futureObserverLibFetch', '#future-observer-fandom-lib-fetch', async function () {
+        const work = String(getSettings().fandomWork || '').trim();
+        if (!work) { toastr.warning('先填上面的作品名。', '观察者论坛'); return; }
+        const lib = getFandomLibrary();
+        if (lib[work]?.manual) { toastr.info('这份是你手动写的资料，已保留。想换成联网结果，请先清空再查询。', '观察者论坛'); return; }
+        const $status = $('#future-observer-fandom-lib-status');
+        $status.text('正在联网查询……');
+        try {
+            const res = await fetchFandomFromWeb(work);
+            if (res.text) {
+                lib[work] = { text: res.text, source: res.source, time: Date.now(), manual: false };
+                saveSettings();
+            }
+            refreshFandomLibraryPanel(res.text ? '' : res.note);
+        } catch (e) {
+            refreshFandomLibraryPanel('查询出错：' + (e?.message || e));
+        }
     });
 
     $(document).off('change.futureObserverFandomWork').on('change.futureObserverFandomWork', '#future-observer-fandom-work', function () {
@@ -2597,7 +3146,7 @@ function bindSharedControls() {
     $(document).off('change.futureObserverTheme').on('change.futureObserverTheme', '.future-observer-theme-select', function () {
         const settings = getSettings();
         const v = String($(this).val());
-        settings.theme = THEME_NAMES.includes(v) ? v : 'night';
+        settings.theme = THEME_NAMES.includes(v) ? v : 'aurora';
         saveSettings();
         syncControlsFromSettings();
     });
@@ -2729,14 +3278,6 @@ function bindSharedControls() {
         settings.customApi.model = picked;
         $('#future-observer-customapi-model').val(picked);
         saveSettings();
-    });
-
-    $(document).off('click.futureObserverAdopt').on('click.futureObserverAdopt', '.future-observer-adopt-btn', function (e) {
-        e.stopPropagation();
-        const name = $(this).data('fo-name');
-        const content = $(this).data('fo-content');
-        if (!name || !content) return;
-        adoptToInput(name, content);
     });
 
     $(document).off('click.futureObserverHistoryPrev').on('click.futureObserverHistoryPrev', '.future-observer-history-prev', function () {
@@ -2874,13 +3415,7 @@ function buildFloatingUI() {
                 </div>
             </div>
             <div class="future-observer-quickrow">
-                <select class="future-observer-direction-select">
-                    <option value="past">过去</option>
-                    <option value="present">现在</option>
-                    <option value="future">未来</option>
-                    <option value="otherworld">异世界</option>
-                </select>
-                <select class="future-observer-identity-select"></select>
+                <select class="future-observer-perspective-select"></select>
                 <button type="button" id="future-observer-options-toggle" class="future-observer-options-toggle" title="更多选项">⚙</button>
             </div>
             <div id="future-observer-chips" class="future-observer-chips"></div>
@@ -2892,16 +3427,28 @@ function buildFloatingUI() {
                     </div>
                     <div id="future-observer-fandom-history-list" class="future-observer-fandom-history-list" style="display:none;"></div>
                 </div>
+                <div id="future-observer-fandom-boost-wrap" class="future-observer-fandom-boost-wrap" style="display:none;">
+                    <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-fandom-boost-toggle"> 同人加强：生成前查维基资料，减少毁人设</label>
+                    <div class="future-observer-fandom-libbar"><span id="future-observer-fandom-lib-toggle" class="future-observer-linkbtn">📚 查看/编辑资料</span></div>
+                    <div id="future-observer-fandom-lib-panel" class="future-observer-fandom-lib-panel" style="display:none;">
+                        <div id="future-observer-fandom-lib-status" class="future-observer-fandom-lib-status"></div>
+                        <textarea id="future-observer-fandom-lib-text" class="future-observer-fandom-lib-text" rows="6" placeholder="这部作品的角色资料。留空则生成时自动联网查；手动写的内容优先级最高。"></textarea>
+                        <div class="future-observer-fandom-lib-actions">
+                            <button type="button" id="future-observer-fandom-lib-save" class="future-observer-reset-btn">保存为我的资料</button>
+                            <button type="button" id="future-observer-fandom-lib-fetch" class="future-observer-reset-btn">联网查询</button>
+                        </div>
+                    </div>
+                </div>
                 <label class="future-observer-popup-checkbox" style="display:none;"><input type="checkbox" id="future-observer-fandom-sameworld"> 剧情本身就发生在这部作品的世界里（穿越/同人卡）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-plan-toggle"> 先构思再写（更充实，更慢）</label>
                 <div class="future-observer-popup-selectrow">
                     <span>主题</span>
                     <select class="future-observer-theme-select">
-                        <option value="night">暗夜（随时间方向变色）</option>
-                        <option value="paper">纸笺</option>
-                        <option value="sakura">樱花</option>
-                        <option value="starry">星空</option>
-                        <option value="neon">霓虹</option>
+                        <option value="aurora">极光（随时间方向变色）</option>
+                        <option value="terminal">复古终端</option>
+                        <option value="blueprint">蓝图</option>
+                        <option value="pop">波普漫画</option>
+                        <option value="steam">蒸汽朋克</option>
                         <option value="ink">水墨</option>
                     </select>
                 </div>
@@ -2924,6 +3471,7 @@ function buildFloatingUI() {
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-hot-toggle"> 热评（标赞数，热门的置顶；仅论坛/新闻载体）</label>
                 <label class="future-observer-popup-checkbox"><input type="checkbox" class="future-observer-protagonist-toggle"> 主角参与讨论（不勾选则主角不会出现）</label>
                 <input type="text" class="future-observer-protagonist-name" placeholder="主角名（留空=你的用户名）" style="display:none;">
+                <label class="future-observer-popup-checkbox future-observer-mainraw-row"><input type="checkbox" class="future-observer-mainraw-toggle"> 走酒馆主连接时用“原始生成”（不带预设和聊天历史）</label>
                 <div class="future-observer-popup-selectrow">
                     <span>内容量</span>
                     <select class="future-observer-richness-select">
@@ -2941,6 +3489,13 @@ function buildFloatingUI() {
                 <button type="button" class="future-observer-history-next menu_button" title="下一条">▶</button>
             </div>
             <div class="future-observer-result future-observer-popup-result">点击下方“生成评论区”查看。</div>
+            <div class="future-observer-topicrow">
+                <div class="future-observer-topicinput-wrap">
+                    <input type="text" class="future-observer-topic-input" maxlength="200" placeholder="💬 讨论话题（留空=讨论剧情）">
+                    <span id="future-observer-topic-history-arrow" class="future-observer-popup-icon-btn" title="最近用过的话题">▾</span>
+                </div>
+                <div id="future-observer-topic-history-list" class="future-observer-fandom-history-list" style="display:none;"></div>
+            </div>
             <div class="future-observer-popup-footer">
                 <button type="button" class="menu_button future-observer-generate-btn">🔭 生成评论区</button>
                 <button type="button" class="menu_button future-observer-cancel-btn" style="display:none;" title="停止生成，保留已经写好的部分">⏹ 停止</button>
@@ -3023,7 +3578,7 @@ function applyPopupTheme() {
     );
     targets.removeClass(THEME_NAMES.map(n => `future-observer-th-${n}`).join(' '));
     targets.addClass(`future-observer-theme-${settings.timeDirection || 'future'}`);
-    targets.addClass(`future-observer-th-${THEME_NAMES.includes(settings.theme) ? settings.theme : 'night'}`);
+    targets.addClass(`future-observer-th-${THEME_NAMES.includes(settings.theme) ? settings.theme : 'aurora'}`);
 }
 
 // 展开/折叠"更多选项"面板（只影响界面，不存进设置，每次打开弹窗默认折叠）
@@ -3049,6 +3604,8 @@ function renderOptionChips() {
         chips.push((SKIN_OPTIONS.find(o => o.value === settings.skin) || { label: settings.skin }).label);
     }
     if (settings.hotComments && (forumModeChip || getSkinSpec(settings).hotAllowed)) chips.push('热评');
+    if (String(settings.topic || '').trim()) chips.push('话题');
+    if (settings.fandomBoost && settings.timeDirection === 'otherworld' && settings.identity === 'fandom') chips.push('同人加强');
     if (settings.protagonistMode) chips.push('主角参与');
     const richLabel = (RICHNESS_OPTIONS.find(o => o.value === settings.richness) || RICHNESS_OPTIONS[2]).label;
     chips.push(`内容·${richLabel}`);
